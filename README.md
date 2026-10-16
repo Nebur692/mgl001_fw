@@ -45,6 +45,8 @@ Pick a firmware from the menu. The gateway reboots when it is done.
 
 > **Everything you do, you do at your own risk.** Flashing a wrong firmware can leave the gateway recoverable only over UART (opening the case). Do not unplug the gateway while it is flashing.
 
+> **Anyone who can reach the gateway over the network gets root on it, with no password.** That is how the modified firmware is meant to work: telnet and SSH open on every boot, and adding your own key does not close the passwordless login. Keep the gateway on a network you trust (an IoT VLAN, for example) and never forward ports 22 or 23 to it from the internet.
+
 ### 🧭 Usage
 
 - **Roll back**: run the installer again and choose `r` to boot the firmware kept in the other bank.
@@ -109,6 +111,8 @@ sh mgl001_update.sh
 Elige un firmware del menú. La pasarela se reinicia al terminar.
 
 > **Todo lo que hagas, lo haces bajo tu responsabilidad.** Grabar un firmware equivocado puede dejar la pasarela recuperable solo por UART (abriendo la carcasa). No desenchufes la pasarela mientras graba.
+
+> **Cualquiera que llegue a la pasarela por la red entra en ella como root, sin contraseña.** Así es como funciona el firmware modificado: telnet y SSH se abren en cada arranque, y poner tu propia llave no quita la entrada sin contraseña. Ten la pasarela en una red de confianza (una VLAN para los aparatos domóticos, por ejemplo) y no redirijas nunca los puertos 22 ni 23 hacia ella desde internet.
 
 ### 🧭 Uso
 
