@@ -1,0 +1,25 @@
+#!/bin/sh
+# mgl001_fw: block or allow Mi Home firmware updates.
+#   mgl001-ota lock     Mi Home updates fail before anything is written (survives reboots)
+#   mgl001-ota unlock   Mi Home updates work as in the stock firmware
+#   mgl001-ota status   prints "locked" or "unlocked"
+# The check lives in /bin/fw_manager.sh (updater), the only path Mi Home uses to install firmware.
+#
+# mgl001_fw: bloquear o permitir las actualizaciones de firmware de Mi Home.
+#   mgl001-ota lock     las actualizaciones de Mi Home fallan antes de escribir nada (aguanta reinicios)
+#   mgl001-ota unlock   las actualizaciones de Mi Home funcionan como en el firmware original
+#   mgl001-ota status   escribe «locked» o «unlocked»
+# La comprobación está en /bin/fw_manager.sh (updater), la única vía por la que Mi Home instala firmware.
+
+LOCK=/data/mgl001_mod/ota.lock
+
+case "$1" in
+    lock)
+        mkdir -p "${LOCK%/*}" && touch "$LOCK" && sync && echo locked ;;
+    unlock)
+        rm -f "$LOCK" && sync && echo unlocked ;;
+    status)
+        if [ -f "$LOCK" ]; then echo locked; else echo unlocked; fi ;;
+    *)
+        echo "usage: mgl001-ota lock|unlock|status" >&2; exit 2 ;;
+esac

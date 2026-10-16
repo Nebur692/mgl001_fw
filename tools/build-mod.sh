@@ -44,9 +44,23 @@ grep -qx '/usr/sbin/mgl001_mod_access.sh &' "$RCS" || { echo "! rcS was not patc
 grep -qx '\[ -x /data/run.sh \] && /data/run.sh &' "$RCS" || { echo "! rcS was not patched (run.sh)"; exit 1; }
 sh -n "$RCS" || { echo "! rcS has a syntax error"; exit 1; }
 
-# 2. Overlay: access script and CA certificates for curl
+# 1b. Mi Home updates can be blocked: check at the top of updater(), before anything is prepared
+FWM=$WORK/bin/fw_manager.sh
+[ "$(grep -cx 'updater()' "$FWM")" = 1 ] || { echo "! fw_manager.sh updater() anchor not found"; exit 1; }
+grep -qx '    if \[ \$# -lt 3 \]; then green_echo "Lost params."; return 1; fi' "$FWM" || { echo "! fw_manager.sh updater() body changed"; exit 1; }
+awk -v hook=mod/ota-lock.sh.in '
+    { print }
+    prev == "updater()" && $0 == "{" { while ((getline l < hook) > 0) print l }
+    { prev = $0 }
+' "$FWM" > "$FWM.new"
+mv "$FWM.new" "$FWM"
+chmod 755 "$FWM"
+grep -qx '    if \[ -f /data/mgl001_mod/ota.lock \]; then' "$FWM" || { echo "! fw_manager.sh was not patched (OTA lock)"; exit 1; }
+sh -n "$FWM" || { echo "! fw_manager.sh has a syntax error"; exit 1; }
+
+# 2. Overlay: access script, OTA lock command and CA certificates for curl
 cp -a mod/overlay/. "$WORK/"
-chmod 755 "$WORK/usr/sbin/mgl001_mod_access.sh"
+chmod 755 "$WORK/usr/sbin/mgl001_mod_access.sh" "$WORK/usr/sbin/mgl001-ota"
 chmod 644 "$WORK/etc/ssl/cert.pem"
 
 # 3. Tools

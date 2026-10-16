@@ -1,0 +1,8 @@
+    # mgl001_fw mod: Mi Home updates can be blocked with "mgl001-ota lock"
+    if [ -f /data/mgl001_mod/ota.lock ]; then
+        # Like Xiaomi's own failure path (update_clean): drop the package, it may be taking RAM
+        [ -f "$3" ] && rm -f "$3"
+        local lock_platform_=`${GETPROP} persist.sys.cloud`
+        update_failed "${lock_platform_:-$DEFAULT_PLATFORM}" "Blocked by mgl001_fw mod (mgl001-ota unlock)"
+        return 1
+    fi

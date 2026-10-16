@@ -1,27 +1,38 @@
 #!/bin/sh
 # Installs a stock or modified firmware on the Xiaomi Smart Home Hub 2 (lumi.gateway.mgl001).
 # It uses the gateway's own installer (/bin/fw_update.sh): kernel and rootfs go to the bank that
-# is not running and the boot switches to it. /data is not touched, so paired devices, automations
-# and settings are kept. The previous firmware stays in the other bank: option "r" goes back to it.
+# is not running. The boot only switches once both are written and checked, in a single write of
+# the U-Boot environment. /data is not touched, so paired devices, automations and settings are
+# kept. The previous firmware stays in the other bank: option "r" goes back to it.
 #
 # Instala un firmware original o modificado en la Xiaomi Smart Home Hub 2 (lumi.gateway.mgl001).
 # Usa el instalador de la propia pasarela (/bin/fw_update.sh): kernel y sistema van al banco que no
-# está en uso y el arranque cambia a él. /data no se toca: se conservan los aparatos emparejados,
-# las automatizaciones y los ajustes. El firmware anterior queda en el otro banco: la opción «r»
-# vuelve a él.
+# está en uso. El arranque solo cambia cuando los dos están escritos y comprobados, en una única
+# escritura del entorno de U-Boot. /data no se toca: se conservan los aparatos emparejados, las
+# automatizaciones y los ajustes. El firmware anterior queda en el otro banco: la opción «r» vuelve a él.
 
 REPO=Nebur692/mgl001_fw
 BRANCH=main
 HOST=raw.githubusercontent.com
-WORK=/tmp/fwup
+R=${MGL001_ROOT:-}   # only for tests: on the gateway it is empty / solo para pruebas: en la pasarela, vacío
+WORK=$R/tmp/fwup
+FWP=$R/etc/fw_printenv
+FWS=$R/etc/fw_setenv
+FW_UPDATE=$R/bin/fw_update.sh
 
 say() { echo "$*"; }
 die() { echo "! $*"; rm -rf "$WORK"; exit 1; }
 
-# HTTPS download with the gateway's own openssl (its busybox wget has no HTTPS)
+# CA bundle: the mod ships /etc/ssl/cert.pem, the stock firmware /etc/ca-certificates.crt
+CA=
+for c in "$R/etc/ssl/cert.pem" "$R/etc/ca-certificates.crt"; do [ -s "$c" ] && { CA=$c; break; }; done
+
+# HTTPS download with the gateway's own openssl (its busybox wget has no HTTPS). The certificate
+# and the host name are checked: the SHA-256 in list.txt is only worth what this channel is worth.
 fetch() { # path-in-repo output
     printf 'GET /%s/%s/%s HTTP/1.0\r\nHost: %s\r\nUser-Agent: mgl001_update\r\n\r\n' "$REPO" "$BRANCH" "$1" "$HOST" |
-        openssl s_client -quiet -connect "$HOST:443" -servername "$HOST" 2>/dev/null | {
+        openssl s_client -quiet -connect "$HOST:443" -servername "$HOST" \
+            -CAfile "$CA" -verify_return_error -verify_hostname "$HOST" 2>/dev/null | {
             IFS= read -r status
             case "$status" in *" 200 "*) ;; *) exit 1;; esac
             while IFS= read -r line; do [ "$line" = "$(printf '\r')" ] && break; done
@@ -29,20 +40,58 @@ fetch() { # path-in-repo output
         }
 }
 
-current_rootfs() { grep -o 'root=/dev/mtdblock[78]' /proc/cmdline | grep -o '[78]$'; }
-first_kernel() { /etc/fw_printenv bootcmd | awk '{print $4}'; }   # KERNEL or KERNEL_BAK
+env_get() { "$FWP" "$1" 2>/dev/null | cut -d= -f2-; }
+current_rootfs() { grep -o 'root=/dev/mtdblock[78]' "$R/proc/cmdline" | grep -o '[78]$'; }
+env_rootfs() { env_get bootargs | grep -o 'root=/dev/mtdblock[78]' | grep -o '[78]$'; }
+first_kernel() { env_get bootcmd | awk '{print $4}'; }   # KERNEL or KERNEL_BAK
+kernel_name() { if [ "$1" = 5 ]; then echo KERNEL; else echo KERNEL_BAK; fi; }
+version_of() { echo "$1" | sed -n 's/^\(mgl001_\)\{0,1\}\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\2/p'; }
+older_than() { # a b: true if version a < version b
+    [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)" = "$1" ]
+}
+
+# bootcmd and bootargs in ONE write of the U-Boot environment: a power cut can never leave the
+# kernel of one bank with the rootfs of the other
+set_boot() { # bootcmd bootargs
+    printf 'bootcmd %s\nbootargs %s\n' "$1" "$2" | "$FWS" -s - >/dev/null 2>&1
+    [ "$(env_get bootcmd)" = "$1" ] && [ "$(env_get bootargs)" = "$2" ]
+}
+
+# The boot settings Xiaomi's fw_update.sh would write to switch to the other bank, built with its
+# own functions but printed instead of written: the environment is only written once, by set_boot
+other_bank_boot() { # sets NEW_BOOTCMD and NEW_BOOTARGS
+    sed -n '/^set_kernel_partitions()/,/^}/p;/^set_rootfs_partitions()/,/^}/p' "$FW_UPDATE" |
+        sed 's#[^ ]*/etc/fw_setenv #boot_value #' > "$WORK/switch.sh"
+    boot_value() { echo "$2"; }
+    . "$WORK/switch.sh"
+    command -v set_kernel_partitions >/dev/null && command -v set_rootfs_partitions >/dev/null || return 1
+    NEW_BOOTCMD=$(set_kernel_partitions "$(kernel_name $KERNEL_NOW)")
+    if [ "$ROOT_OTHER" = 8 ]; then NEW_BOOTARGS=$(set_rootfs_partitions x); else NEW_BOOTARGS=$(set_rootfs_partitions ""); fi
+    # Must point to the other bank, as a pair
+    echo "$NEW_BOOTARGS" | grep -q "^root=/dev/mtdblock$ROOT_OTHER " &&
+        [ "$(echo "$NEW_BOOTCMD" | awk '{print $4}')" = "$(kernel_name $KERNEL_OTHER)" ]
+}
+
+# Xiaomi's fw_update.sh without its two boot switches: it only writes the image to the free bank
+make_writer() {
+    W=$WORK/fw_write.sh
+    [ "$(grep -cxF '        set_kernel_partitions "$KERNEL_PARTITION"' "$FW_UPDATE")" = 1 ] &&
+        [ "$(grep -cxF '        set_rootfs_partitions "$ROOTFS_PARTITION"' "$FW_UPDATE")" = 1 ] || return 1
+    grep -vxF -e '        set_kernel_partitions "$KERNEL_PARTITION"' -e '        set_rootfs_partitions "$ROOTFS_PARTITION"' "$FW_UPDATE" > "$W"
+    ! grep -q -e 'set_kernel_partitions "' -e 'set_rootfs_partitions "' "$W" && sh -n "$W"
+}
 
 # The other bank must hold a valid image before booting into it
 bank_ok() { # rootfs-mtd kernel-mtd
-    [ "$(dd if=/dev/mtd${1}ro bs=4 count=1 2>/dev/null)" = "hsqs" ] &&
-        [ "$(dd if=/dev/mtd${2}ro bs=4 count=1 2>/dev/null | hexdump -e '4/1 "%02x"')" = "27051956" ]
+    [ "$(dd if="$R/dev/mtd${1}ro" bs=4 count=1 2>/dev/null)" = "hsqs" ] &&
+        [ "$(dd if="$R/dev/mtd${2}ro" bs=4 count=1 2>/dev/null | hexdump -e '4/1 "%02x"')" = "27051956" ]
 }
 
 # The running kernel must be able to mount the rootfs and run its shell: if not, it would not boot
 rootfs_check() { # rootfs-mtd
     m=$WORK/mnt
     mkdir -p "$m"
-    mount -t squashfs -o ro "/dev/mtdblock$1" "$m" 2>/dev/null || return 1
+    mount -t squashfs -o ro "$R/dev/mtdblock$1" "$m" 2>/dev/null || return 1
     ok=1
     [ -x "$m/linuxrc" ] && [ -x "$m/etc/init.d/rcS" ] && chroot "$m" /bin/busybox true || ok=0
     OTHER_VERSION="$(cat "$m/etc/mgl001_fw_mod" 2>/dev/null || sed -n 's/^ro.sys.fw_ver=//p;s/^ro.sys.build_num=//p' "$m/etc/build.prop" | tr '\n' '_' | sed 's/_$//')"
@@ -56,14 +105,25 @@ EXPECTED_MTD='mtd5: 00500000 00020000 "KERNEL"
 mtd6: 00500000 00020000 "KERNEL_BAK"
 mtd7: 01000000 00020000 "rootfs"
 mtd8: 01000000 00020000 "rootfs_bak"'
-[ "$(grep 'KERNEL\|rootfs' /proc/mtd)" = "$EXPECTED_MTD" ] || die "Unexpected flash layout, nothing was changed"
+[ "$(grep 'KERNEL\|rootfs' "$R/proc/mtd")" = "$EXPECTED_MTD" ] || die "Unexpected flash layout, nothing was changed"
+[ -n "$CA" ] || die "No CA certificates found to check the download, nothing was changed"
 
 ROOT_NOW=$(current_rootfs)
 [ -n "$ROOT_NOW" ] || die "Cannot tell which bank is running"
-if [ "$ROOT_NOW" = 8 ]; then ROOT_OTHER=7; else ROOT_OTHER=8; fi
-if [ "$(first_kernel)" = KERNEL_BAK ]; then KERNEL_NOW=6; KERNEL_OTHER=5; else KERNEL_NOW=5; KERNEL_OTHER=6; fi
+if [ "$ROOT_NOW" = 8 ]; then ROOT_OTHER=7; KERNEL_NOW=6; KERNEL_OTHER=5
+else ROOT_OTHER=8; KERNEL_NOW=5; KERNEL_OTHER=6; fi
 
-say "  Running: $(cat /etc/mgl001_fw_mod 2>/dev/null || echo "stock $(agetprop ro.sys.fw_ver)_$(agetprop ro.sys.build_num)") (rootfs mtd$ROOT_NOW, kernel mtd$KERNEL_NOW)"
+# Banks go in pairs (rootfs mtd7 + KERNEL, rootfs mtd8 + KERNEL_BAK), as Xiaomi's own updates leave
+# them. If the boot settings do not match what is running, a switch is waiting for a reboot: any
+# write now would land in the wrong bank.
+[ "$(env_rootfs)" = "$ROOT_NOW" ] && [ "$(first_kernel)" = "$(kernel_name $KERNEL_NOW)" ] ||
+    die "The boot is set to another firmware than the running one (a switch is waiting for a reboot). Reboot and run this again. Nothing was changed"
+
+OLD_BOOTCMD=$(env_get bootcmd)
+OLD_BOOTARGS=$(env_get bootargs)
+RUN_VER=$(agetprop ro.sys.fw_ver)
+
+say "  Running: $(cat "$R/etc/mgl001_fw_mod" 2>/dev/null || echo "stock ${RUN_VER}_$(agetprop ro.sys.build_num)") (rootfs mtd$ROOT_NOW, kernel mtd$KERNEL_NOW)"
 
 rm -rf "$WORK"; mkdir -p "$WORK"
 say "* Getting firmware list"
@@ -86,16 +146,21 @@ read CHOICE
 
 if [ "$CHOICE" = r ]; then
     bank_ok "$ROOT_OTHER" "$KERNEL_OTHER" || die "The other bank has no valid firmware, nothing was changed"
-    if [ "$ROOT_OTHER" = 8 ]; then fw_root=x; else fw_root=; fi
     rootfs_check "$ROOT_OTHER" || die "The other bank does not mount, nothing was changed"
     say "  Other bank: $OTHER_VERSION"
-    printf 'Boot from rootfs mtd%s and kernel mtd%s? Type yes / Escribe yes: ' "$ROOT_OTHER" "$KERNEL_OTHER"
-    read OK; [ "$OK" = yes ] || die "Cancelled"
-    # Same switch fw_update.sh does after writing
-    sed -n '/^set_kernel_partitions()/,/^}/p;/^set_rootfs_partitions()/,/^}/p' /bin/fw_update.sh > "$WORK/switch.sh"
-    . "$WORK/switch.sh"
-    if [ "$KERNEL_OTHER" = 5 ]; then set_kernel_partitions KERNEL_BAK; else set_kernel_partitions KERNEL; fi
-    set_rootfs_partitions "$fw_root"
+    CONFIRM=yes
+    OTHER_VER=$(version_of "$OTHER_VERSION")
+    if [ -z "$OTHER_VER" ] || older_than "$OTHER_VER" "$RUN_VER"; then
+        say "! The other bank holds ${OTHER_VER:-an unknown version}, older than the running $RUN_VER."
+        say "! Xiaomi updates also flash the Zigbee chip: an older firmware may not work with it."
+        say "! El otro banco tiene ${OTHER_VER:-una versión desconocida}, anterior a la $RUN_VER en marcha: el chip Zigbee puede no funcionar con ella."
+        CONFIRM=older
+    fi
+    printf 'Boot from rootfs mtd%s and kernel mtd%s? Type %s / Escribe %s: ' "$ROOT_OTHER" "$KERNEL_OTHER" "$CONFIRM" "$CONFIRM"
+    read OK; [ "$OK" = "$CONFIRM" ] || die "Cancelled"
+    other_bank_boot || die "$FW_UPDATE has changed (unexpected boot settings), nothing was changed"
+    trap '' HUP INT TERM QUIT
+    set_boot "$NEW_BOOTCMD" "$NEW_BOOTARGS" || { set_boot "$OLD_BOOTCMD" "$OLD_BOOTARGS"; die "Boot was not switched, left on the current firmware"; }
     say "* Done. Rebooting in 10 seconds"
     rm -rf "$WORK"; sleep 10; reboot; exit 0
 fi
@@ -108,11 +173,14 @@ $LINE
 EOF
 
 # No downgrades: Xiaomi updates also flash the Zigbee chip, and an older firmware may not work with it
-NEW_VER=$(echo "$NAME" | sed -n 's/^mgl001_\([0-9.]*\)_.*/\1/p')
-RUN_VER=$(agetprop ro.sys.fw_ver)
-if [ "$(printf '%s\n%s\n' "$NEW_VER" "$RUN_VER" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)" != "$RUN_VER" ]; then
-    die "$NAME is older than the running firmware ($RUN_VER): the Zigbee chip may not work with it. Nothing was changed"
-fi
+NEW_VER=$(version_of "$NAME")
+[ -n "$NEW_VER" ] || die "Cannot read the version of $NAME, nothing was changed"
+older_than "$NEW_VER" "$RUN_VER" && die "$NAME is older than the running firmware ($RUN_VER): the Zigbee chip may not work with it. Nothing was changed"
+
+# Both images are downloaded to RAM (/tmp): leave room for the gateway services, as fw_manager.sh does
+NEED_KB=$(( (KSIZE + RSIZE) / 1024 + 16384 ))
+AVAIL_KB=$(awk '/^MemAvailable:/{print $2}' "$R/proc/meminfo")
+[ -n "$AVAIL_KB" ] && [ "$AVAIL_KB" -ge "$NEED_KB" ] || die "Not enough free memory (${AVAIL_KB:-?} KB, need $NEED_KB KB), nothing was changed"
 
 say "* Downloading $NAME"
 fetch "firmware/$KIND/$NAME/kernel" "$WORK/kernel" || die "Download failed (kernel)"
@@ -127,24 +195,29 @@ say "Paired devices and settings in /data are kept. Do not unplug the gateway."
 printf 'Type yes to continue / Escribe yes para seguir: '
 read OK; [ "$OK" = yes ] || die "Cancelled"
 
-OLD_BOOTCMD=$(/etc/fw_printenv bootcmd | cut -d= -f2-)
-OLD_BOOTARGS=$(/etc/fw_printenv bootargs | cut -d= -f2-)
-restore_env() {
-    /etc/fw_setenv bootcmd "$OLD_BOOTCMD"
-    /etc/fw_setenv bootargs "$OLD_BOOTARGS"
-}
+make_writer || die "$FW_UPDATE has changed, nothing was changed"
+other_bank_boot || die "$FW_UPDATE has changed (unexpected boot settings), nothing was changed"
 
+# From here on a closed SSH session or Ctrl-C must not stop the script half way
+trap '' HUP INT TERM QUIT
+
+# The boot is not touched while writing: until the final switch the gateway keeps booting the
+# running firmware, so a power cut at any point leaves it as it was
 say "* Flashing kernel"
-/bin/fw_update.sh "$WORK/kernel" || { restore_env; die "Kernel write failed, boot left on the current firmware"; }
+sh "$W" "$WORK/kernel" >/dev/null 2>&1 || die "Kernel write failed, boot left on the current firmware"
 say "* Flashing rootfs"
-/bin/fw_update.sh "$WORK/rootfs.sqfs" || { restore_env; die "Rootfs write failed, boot left on the current firmware"; }
+sh "$W" "$WORK/rootfs.sqfs" >/dev/null 2>&1 || die "Rootfs write failed, boot left on the current firmware"
+[ "$(env_get bootcmd)" = "$OLD_BOOTCMD" ] && [ "$(env_get bootargs)" = "$OLD_BOOTARGS" ] ||
+    { set_boot "$OLD_BOOTCMD" "$OLD_BOOTARGS"; die "The boot settings changed while writing (put back), left on the current firmware"; }
 
 say "* Verifying what was written"
-[ "$(head -c "$KSIZE" /dev/mtd${KERNEL_OTHER}ro | sha256sum | cut -d' ' -f1)" = "$KSHA" ] || { restore_env; die "Kernel verify failed, boot left on the current firmware"; }
-[ "$(head -c "$RSIZE" /dev/mtd${ROOT_OTHER}ro | sha256sum | cut -d' ' -f1)" = "$RSHA" ] || { restore_env; die "Rootfs verify failed, boot left on the current firmware"; }
-rootfs_check "$ROOT_OTHER" || { restore_env; die "The new rootfs does not mount, boot left on the current firmware"; }
-/etc/fw_printenv bootargs | grep -q "mtdblock$ROOT_OTHER" || { restore_env; die "Boot was not switched, left on the current firmware"; }
+[ "$(head -c "$KSIZE" "$R/dev/mtd${KERNEL_OTHER}ro" | sha256sum | cut -d' ' -f1)" = "$KSHA" ] || die "Kernel verify failed, boot left on the current firmware"
+[ "$(head -c "$RSIZE" "$R/dev/mtd${ROOT_OTHER}ro" | sha256sum | cut -d' ' -f1)" = "$RSHA" ] || die "Rootfs verify failed, boot left on the current firmware"
+rootfs_check "$ROOT_OTHER" || die "The new rootfs does not mount, boot left on the current firmware"
 say "  Verified: $OTHER_VERSION"
+
+say "* Switching the boot"
+set_boot "$NEW_BOOTCMD" "$NEW_BOOTARGS" || { set_boot "$OLD_BOOTCMD" "$OLD_BOOTARGS"; die "Boot was not switched, left on the current firmware"; }
 
 rm -rf "$WORK"
 say
