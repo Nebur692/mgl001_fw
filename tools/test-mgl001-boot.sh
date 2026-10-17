@@ -60,7 +60,9 @@ v() { grep "^$1=" "$T/r/env" | cut -d= -f2-; }
 writes() { wc -l < "$T/r/writes"; }
 # What Xiaomi's fw_update.sh sees (get_kernel_partitions): must be ONE word, KERNEL or KERNEL_BAK
 xiaomi_kernel() { "$T/r/etc/fw_printenv" | grep bootcmd | awk '{print $4}' | tr '\n' ' '; }
-run() { MGL001_ROOT=$T/r PATH="$T/fake:$PATH" timeout 20 sh "$BOOT" "$@"; r=$?
+# busybox 1.20 (the gateway) wants timeout -t SECS; newer ones take SECS / la busybox 1.20 quiere -t
+if timeout -t 1 true 2>/dev/null; then TO="timeout -t 20"; else TO="timeout 20"; fi
+run() { MGL001_ROOT=$T/r PATH="$T/fake:$PATH" $TO sh "$BOOT" "$@"; r=$?
     [ $r != 124 ] || { echo "BAD: $1 hung (deadlock)"; mal=$((mal+1)); }; return $r; }
 chk() { if [ "$2" = "$3" ]; then ok=$((ok+1)); else mal=$((mal+1)); echo "BAD: $1 (expected «$3», got «$2»)"; fi; }
 running() { sed -i "s#mtdblock[78]#mtdblock$1#" "$T/r/proc/cmdline"; }   # a reboot into bank $1

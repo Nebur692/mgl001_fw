@@ -62,7 +62,7 @@ bank_can_trial() { # rootfs-bank
     mkdir -p "$m"
     mount -t squashfs -o ro "$R/dev/mtdblock$1" "$m" 2>/dev/null || { rmdir "$m"; return 1; }
     ok=0
-    [ -x "$m/usr/sbin/mgl001-boot" ] && grep -qx '/usr/sbin/mgl001-boot boot' "$m/etc/init.d/rcS" && ok=1
+    [ -x "$m/usr/sbin/mgl001-boot" ] && grep -qxF '/usr/sbin/mgl001-boot boot' "$m/etc/init.d/rcS" && ok=1   # -F: busybox 1.20 grep -x misses it as a regex
     umount "$m"; rmdir "$m"
     [ "$ok" = 1 ]
 }
