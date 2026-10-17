@@ -26,9 +26,12 @@ SUFFIX=$($GETPROP persist.sys.wlan_mac | cut -b 13-14,16-17 | tr '[a-f]' '[A-F]'
 [ -n "$SUFFIX" ] || SUFFIX=0000
 hostname "Mijia_Hub_V2-$SUFFIX"
 
-# Time zone: the one Mi Home saved (as Xiaomi's fw_manager.sh does), UTC if there is none
-# Zona horaria: la que guardó Mi Home (como fw_manager.sh de Xiaomi), UTC si no hay
-TZFILE=$($GETPROP persist.app.miio_timezone)
+# Time zone: Home Assistant's own (mgl001-hass keeps it in /data/mgl001/localtime when Home Assistant
+# connects); until then the one Mi Home saved (as Xiaomi's fw_manager.sh does), or UTC
+# Zona horaria: la de Home Assistant (mgl001-hass la guarda en /data/mgl001/localtime cuando conecta);
+# hasta entonces la que guardó Mi Home (como fw_manager.sh de Xiaomi), o UTC
+TZFILE=/data/mgl001/localtime
+[ -s "$TZFILE" ] || TZFILE=$($GETPROP persist.app.miio_timezone)
 [ -f "$TZFILE" ] || TZFILE=/usr/share/zoneinfo/UTC
 ln -sf "$TZFILE" /tmp/localtime
 

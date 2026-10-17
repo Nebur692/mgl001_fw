@@ -40,6 +40,8 @@ var (
 	flagNoLED    = flag.Bool("no-led", false, "do not drive the LED (tests on a firmware that does)")
 	flagZbPort   = flag.Int("zigbee-port", 6638, "Zigbee bridge TCP port for ZHA, announced by mDNS (0: no bridge)")
 	flagZbInHass = flag.Bool("zigbee-here", false, "run the Zigbee bridge inside this process (tests); on the gateway it is its own service, mgl001-zigbee")
+	flagTZFile   = flag.String("tz-file", "/data/mgl001/localtime", "where the time zone from Home Assistant is kept (TZif)")
+	flagTZLink   = flag.String("tz-link", "/tmp/localtime", "the link /etc/localtime points to")
 	flagZbUART   = flag.String("zigbee-uart", "/dev/ttyS1", "Zigbee coordinator UART")
 	flagZbNoFlow = flag.Bool("zigbee-no-flow", false, "no RTS/CTS on the Zigbee UART (tests on a pseudo-terminal)")
 	flagBtInfo   = flag.Bool("btinfo", false, "read the Bluetooth controller version and exit (read-only)")
@@ -52,6 +54,7 @@ var (
 	gw  *Gateway
 	bt  *Proxy
 	upd *Updater
+	tz  *TimeZone
 )
 
 func loadKey(path string) []byte {
@@ -136,6 +139,7 @@ func main() {
 	mac := ifaceMAC("eth0")
 	gw = NewGateway()
 	upd = NewUpdater()
+	tz = NewTimeZone(*flagTZFile, *flagTZLink)
 	if !*flagNoBT {
 		bt = NewProxy(0, *flagBondDir)
 	}
@@ -206,12 +210,17 @@ func handle(c *Conn, m proto.Message) {
 			_ = c.Send(s)
 		}
 		_ = c.Send(upd.State())
+		// Home Assistant answers with the time and its own time zone / HA responde con la hora y su zona
+		_ = c.Send(&api.GetTimeRequest{})
 	case *api.SubscribeLogsRequest, *api.SubscribeHomeassistantServicesRequest, *api.SubscribeHomeAssistantStatesRequest:
 		// nothing to send / nada que mandar
 	case *api.LightCommandRequest:
 		gw.LightCommand(r)
 	case *api.ButtonCommandRequest:
 		gw.ButtonCommand(r)
+	case *api.GetTimeResponse:
+		tz.Apply(r.Timezone, r.EpochSeconds)
+		gw.SetText(keyTimeZone, tz.Text())
 	case *api.UpdateCommandRequest:
 		upd.Command(r)
 	default:

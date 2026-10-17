@@ -55,13 +55,16 @@ type Gateway struct {
 	led     ledValue
 	sensors map[uint32]float32
 	zigbee  bool
+	eth     bool
+	texts   map[uint32]string // text sensors that change: last reboot, IP address, time zone
 	adverts float32
 	saved   []byte      // LED state last written to flash
 	saveT   *time.Timer // pending write (changes in a row are written once)
 }
 
 func NewGateway() *Gateway {
-	g := &Gateway{led: ledValue{Brightness: 1, R: 1, G: 1, B: 1}, sensors: map[uint32]float32{}}
+	g := &Gateway{led: ledValue{Brightness: 1, R: 1, G: 1, B: 1}, sensors: map[uint32]float32{},
+		texts: map[uint32]string{keyReboot: rebootReason()}}
 	if b, err := os.ReadFile(ledState); err == nil {
 		_ = json.Unmarshal(b, &g.led)
 		g.saved = b
@@ -90,6 +93,14 @@ func (g *Gateway) List() []proto.Message {
 		&api.ListEntitiesTextSensorResponse{ObjectId: "firmware", Key: keyFirmware, Name: "Firmware", Icon: "mdi:chip", EntityCategory: diag()},
 		&api.ListEntitiesTextSensorResponse{ObjectId: "bank", Key: keyBank, Name: "Firmware bank", Icon: "mdi:swap-horizontal", EntityCategory: diag()},
 		&api.ListEntitiesButtonResponse{ObjectId: "restart", Key: keyRestart, Name: "Restart", DeviceClass: "restart", EntityCategory: api.EntityCategory_ENTITY_CATEGORY_CONFIG},
+		&api.ListEntitiesSensorResponse{ObjectId: "cpu_temperature", Key: keyCPUTemp, Name: "CPU temperature", UnitOfMeasurement: "°C",
+			DeviceClass: "temperature", StateClass: api.SensorStateClass_STATE_CLASS_MEASUREMENT, EntityCategory: diag()},
+		&api.ListEntitiesTextSensorResponse{ObjectId: "last_reboot", Key: keyReboot, Name: "Last reboot", Icon: "mdi:restart-alert", EntityCategory: diag()},
+		&api.ListEntitiesBinarySensorResponse{ObjectId: "ethernet", Key: keyEthLink, Name: "Ethernet", DeviceClass: "connectivity", EntityCategory: diag()},
+		&api.ListEntitiesSensorResponse{ObjectId: "ethernet_speed", Key: keyEthSpeed, Name: "Ethernet speed", UnitOfMeasurement: "Mbit/s",
+			DeviceClass: "data_rate", StateClass: api.SensorStateClass_STATE_CLASS_MEASUREMENT, EntityCategory: diag()},
+		&api.ListEntitiesTextSensorResponse{ObjectId: "ip_address", Key: keyIP, Name: "IP address", Icon: "mdi:ip-network", EntityCategory: diag()},
+		&api.ListEntitiesTextSensorResponse{ObjectId: "time_zone", Key: keyTimeZone, Name: "Time zone", Icon: "mdi:map-clock", EntityCategory: diag()},
 	}
 	if bt != nil {
 		l = append(l, &api.ListEntitiesSensorResponse{ObjectId: "ble_adverts", Key: keyBTAdverts, Name: "Bluetooth advertisements",
@@ -108,9 +119,16 @@ func (g *Gateway) States() []proto.Message {
 	defer g.mu.Unlock()
 	l := []proto.Message{g.ledStateMsg(), &api.BinarySensorStateResponse{Key: keyZigbee, State: g.zigbee},
 		&api.TextSensorStateResponse{Key: keyFirmware, State: firmwareName()},
-		&api.TextSensorStateResponse{Key: keyBank, State: bankName()}}
+		&api.TextSensorStateResponse{Key: keyBank, State: bankName()},
+		&api.BinarySensorStateResponse{Key: keyEthLink, State: g.eth}}
 	for k, v := range g.sensors {
 		l = append(l, &api.SensorStateResponse{Key: k, State: v})
+	}
+	if _, ok := g.sensors[keyCPUTemp]; !ok {
+		l = append(l, &api.SensorStateResponse{Key: keyCPUTemp, MissingState: true})
+	}
+	for k, v := range g.texts {
+		l = append(l, &api.TextSensorStateResponse{Key: k, State: v, MissingState: v == ""})
 	}
 	return l
 }
@@ -339,29 +357,36 @@ func (g *Gateway) Run() {
 		if bt != nil {
 			vals[keyBTAdverts] = float32(bt.TakeAdvertCount())
 		}
-		zb := zigbeeConnected()
-		changed := zb != g.zigbee || tick == 0
-		g.zigbee = zb
+		if t, ok := cpuTemp(); ok {
+			vals[keyCPUTemp] = t
+		} else {
+			delete(g.sensors, keyCPUTemp) // States() then sends it as "no value" / States() la manda «sin valor»
+		}
+		vals[keyEthSpeed] = ethSpeed()
 		for k, v := range vals {
 			g.sensors[k] = v
+		}
+		// Text sensors are sent only when they change / Los de texto solo se mandan si cambian
+		var texts []proto.Message
+		for k, v := range map[uint32]string{keyIP: ipAddress(), keyTimeZone: tz.Text()} {
+			if old, ok := g.texts[k]; !ok || old != v {
+				g.texts[k] = v
+				texts = append(texts, &api.TextSensorStateResponse{Key: k, State: v, MissingState: v == ""})
+			}
 		}
 		g.mu.Unlock()
 		for k, v := range vals {
 			broadcastState(&api.SensorStateResponse{Key: k, State: v})
 		}
-		if changed {
-			broadcastState(&api.BinarySensorStateResponse{Key: keyZigbee, State: zb})
+		for _, m := range texts {
+			broadcastState(m)
 		}
+		g.checkLinks(tick == 0)
 		tick++
-		// Zigbee is checked every 5 s, the rest every 60 s
+		// Zigbee and Ethernet are checked every 5 s, the rest every 60 s
 		for i := 0; i < 12; i++ {
 			time.Sleep(5 * time.Second)
-			if z := zigbeeConnected(); z != g.zigbee {
-				g.mu.Lock()
-				g.zigbee = z
-				g.mu.Unlock()
-				broadcastState(&api.BinarySensorStateResponse{Key: keyZigbee, State: z})
-			}
+			g.checkLinks(false)
 		}
 	}
 }
@@ -378,4 +403,30 @@ func (g *Gateway) saveLED() {
 		return
 	}
 	g.saved = b
+}
+
+// checkLinks sends the Zigbee bridge and Ethernet states when they change (or always, on the first pass).
+func (g *Gateway) checkLinks(force bool) {
+	z, e := zigbeeConnected(), ethLink()
+	g.mu.Lock()
+	zc, ec := force || z != g.zigbee, force || e != g.eth
+	g.zigbee, g.eth = z, e
+	g.mu.Unlock()
+	if zc {
+		broadcastState(&api.BinarySensorStateResponse{Key: keyZigbee, State: z})
+	}
+	if ec {
+		broadcastState(&api.BinarySensorStateResponse{Key: keyEthLink, State: e})
+	}
+}
+
+// SetText sets a text sensor and sends it if it changed.
+func (g *Gateway) SetText(key uint32, v string) {
+	g.mu.Lock()
+	old, ok := g.texts[key]
+	g.texts[key] = v
+	g.mu.Unlock()
+	if !ok || old != v {
+		broadcastState(&api.TextSensorStateResponse{Key: key, State: v, MissingState: v == ""})
+	}
 }
