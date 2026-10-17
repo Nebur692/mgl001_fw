@@ -1,0 +1,4 @@
+#!/bin/sh
+# mgl001_fw LAN variant: Xiaomi's own DHCP script (NTP runs on its own, see mgl001_lan_init.sh).
+# Variante LAN: el guion DHCP de Xiaomi (el NTP va aparte, ver mgl001_lan_init.sh).
+exec /etc/udhcp/simple.script "$@"

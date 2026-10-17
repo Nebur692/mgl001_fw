@@ -1,0 +1,6 @@
+# What the radio firmwares are built from. tools/check-upstream.sh compares it with the newest upstream
+# and opens a GitHub issue for anything new. Update a line when the firmware is rebuilt from the new one.
+# De dónde salen los firmwares de las radios. Un aviso (incidencia) cuando hay algo nuevo arriba.
+# name|repository|kind (release or commit)|version we use
+zigbee|NabuCasa/silabs-firmware-builder|release|v2026.02.23
+bluetooth|telink-semi/tc_ble_sdk|commit|94f7414739dd43a588e7f54af59048ef29d6abb8

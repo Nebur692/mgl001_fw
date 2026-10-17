@@ -1,0 +1,19 @@
+# Daily check for new Zigbee (NCP) and Bluetooth (Telink SDK) firmware upstream: opens an issue when there is
+# one (see firmware/upstream.txt and tools/check-upstream.sh). Can also be run by hand from the Actions tab.
+name: Upstream firmware check
+on:
+  schedule:
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Look for new upstream firmware
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh tools/check-upstream.sh

@@ -11,6 +11,14 @@
 # escritura del entorno de U-Boot. /data no se toca: se conservan los aparatos emparejados, las
 # automatizaciones y los ajustes. El firmware anterior queda en el otro banco: la opción «r» vuelve a él.
 
+#
+# Without questions (Home Assistant updates on the LAN variant):
+#   sh mgl001_update.sh --install <name> [--trial]
+# --trial boots the new firmware once with mgl001-boot: it comes back to this one unless it is kept.
+# MGL001_LOCAL=<dir> takes list.txt and <kind>/<name>/{kernel,rootfs.sqfs} from a local folder instead of GitHub.
+# Sin preguntas: --install <nombre> [--trial]. --trial arranca el nuevo una vez con mgl001-boot.
+# MGL001_LOCAL=<carpeta> toma la lista y las imágenes de una carpeta local en lugar de GitHub.
+
 REPO=Nebur692/mgl001_fw
 BRANCH=main
 HOST=raw.githubusercontent.com
@@ -19,6 +27,18 @@ WORK=$R/tmp/fwup
 FWP=$R/etc/fw_printenv
 FWS=$R/etc/fw_setenv
 FW_UPDATE=$R/bin/fw_update.sh
+BOOT=${MGL001_BOOT:-$R/usr/sbin/mgl001-boot}
+LOCAL=${MGL001_LOCAL:-}
+
+INSTALL=; TRIAL=
+case "$1" in
+    --install)
+        INSTALL=$2
+        [ -n "$INSTALL" ] || { echo "! --install needs a firmware name"; exit 1; }
+        case "$3" in --trial) TRIAL=1;; '') ;; *) echo "! Unknown option $3"; exit 1;; esac ;;
+    '') ;;
+    *) echo "usage: sh mgl001_update.sh [--install <name> [--trial]]"; exit 2 ;;
+esac
 
 say() { echo "$*"; }
 die() { echo "! $*"; rm -rf "$WORK"; exit 1; }
@@ -30,6 +50,7 @@ for c in "$R/etc/ssl/cert.pem" "$R/etc/ca-certificates.crt"; do [ -s "$c" ] && {
 # HTTPS download with the gateway's own openssl (its busybox wget has no HTTPS). The certificate
 # and the host name are checked: the SHA-256 in list.txt is only worth what this channel is worth.
 fetch() { # path-in-repo output
+    if [ -n "$LOCAL" ]; then cp "$LOCAL/${1#firmware/}" "$2" 2>/dev/null; return; fi
     printf 'GET /%s/%s/%s HTTP/1.0\r\nHost: %s\r\nUser-Agent: mgl001_update\r\n\r\n' "$REPO" "$BRANCH" "$1" "$HOST" |
         openssl s_client -quiet -connect "$HOST:443" -servername "$HOST" \
             -CAfile "$CA" -verify_return_error -verify_hostname "$HOST" 2>/dev/null | {
@@ -75,6 +96,11 @@ other_bank_boot() { # sets NEW_BOOTCMD and NEW_BOOTARGS
 # Xiaomi's fw_update.sh without its two boot switches: it only writes the image to the free bank
 make_writer() {
     W=$WORK/fw_write.sh
+    # fw_update.sh picks the kernel bank with `fw_printenv | grep bootcmd`: any other variable with
+    # "bootcmd" in its name gives it two lines and it would write the RUNNING kernel
+    # fw_update.sh elige el banco con `fw_printenv | grep bootcmd`: otra variable así le haría escribir
+    # el kernel EN USO
+    [ "$("$FWP" 2>/dev/null | grep -c bootcmd)" = 1 ] || return 1
     [ "$(grep -cxF '        set_kernel_partitions "$KERNEL_PARTITION"' "$FW_UPDATE")" = 1 ] &&
         [ "$(grep -cxF '        set_rootfs_partitions "$ROOTFS_PARTITION"' "$FW_UPDATE")" = 1 ] || return 1
     grep -vxF -e '        set_kernel_partitions "$KERNEL_PARTITION"' -e '        set_rootfs_partitions "$ROOTFS_PARTITION"' "$FW_UPDATE" > "$W"
@@ -106,7 +132,13 @@ mtd6: 00500000 00020000 "KERNEL_BAK"
 mtd7: 01000000 00020000 "rootfs"
 mtd8: 01000000 00020000 "rootfs_bak"'
 [ "$(grep 'KERNEL\|rootfs' "$R/proc/mtd")" = "$EXPECTED_MTD" ] || die "Unexpected flash layout, nothing was changed"
-[ -n "$CA" ] || die "No CA certificates found to check the download, nothing was changed"
+[ -n "$CA" ] || [ -n "$LOCAL" ] || die "No CA certificates found to check the download, nothing was changed"
+[ -z "$TRIAL" ] || [ -x "$BOOT" ] || die "A trial boot needs $BOOT (LAN variant), nothing was changed"
+# A trial still open (or its leftovers) changes what the boot will do: any install waits for it
+# Una prueba abierta (o sus restos) cambia lo que hará el arranque: ninguna instalación sigue
+if [ -x "$BOOT" ]; then
+    ! "$BOOT" status | grep -q "^trial boot" || die "A trial boot is still open: keep it or go back first. Nothing was changed"
+fi
 
 ROOT_NOW=$(current_rootfs)
 [ -n "$ROOT_NOW" ] || die "Cannot tell which bank is running"
@@ -130,6 +162,13 @@ say "* Getting firmware list"
 # Without network only the rollback ("r") is offered
 fetch firmware/list.txt "$WORK/list.txt" || { say "! Cannot download the firmware list, check the network"; : > "$WORK/list.txt"; }
 
+if [ -n "$INSTALL" ]; then
+    LINE=$(awk -F'|' -v n="$INSTALL" '$1 == n { print; exit }' "$WORK/list.txt")
+    [ -n "$LINE" ] || die "$INSTALL is not in the firmware list, nothing was changed"
+    CHOICE=byname
+fi
+
+if [ -z "$INSTALL" ]; then   # menu (not indented, to keep it as it was)
 say
 say "Available firmware / Firmware disponible:"
 say "[0] Exit / Salir"
@@ -159,7 +198,7 @@ if [ "$CHOICE" = r ]; then
     printf 'Boot from rootfs mtd%s and kernel mtd%s? Type %s / Escribe %s: ' "$ROOT_OTHER" "$KERNEL_OTHER" "$CONFIRM" "$CONFIRM"
     read OK; [ "$OK" = "$CONFIRM" ] || die "Cancelled"
     other_bank_boot || die "$FW_UPDATE has changed (unexpected boot settings), nothing was changed"
-    trap '' HUP INT TERM QUIT
+    trap '' HUP INT TERM QUIT PIPE
     set_boot "$NEW_BOOTCMD" "$NEW_BOOTARGS" || { set_boot "$OLD_BOOTCMD" "$OLD_BOOTARGS"; die "Boot was not switched, left on the current firmware"; }
     say "* Done. Rebooting in 10 seconds"
     rm -rf "$WORK"; sleep 10; reboot; exit 0
@@ -168,6 +207,7 @@ fi
 case "$CHOICE" in ''|*[!0-9]*) die "Wrong choice";; esac
 [ "$CHOICE" -ge 1 ] && [ "$CHOICE" -le "$N" ] || { rm -rf "$WORK"; say "Exit"; exit 0; }
 LINE=$(grep -v '^#' "$WORK/list.txt" | grep -v '^$' | sed -n "${CHOICE}p")
+fi   # menu
 IFS='|' read -r NAME KIND KSIZE KSHA RSIZE RSHA <<EOF
 $LINE
 EOF
@@ -192,14 +232,16 @@ say "  SHA-256 OK"
 say
 say "It will be written to rootfs mtd$ROOT_OTHER and kernel mtd$KERNEL_OTHER (the bank not in use)."
 say "Paired devices and settings in /data are kept. Do not unplug the gateway."
-printf 'Type yes to continue / Escribe yes para seguir: '
-read OK; [ "$OK" = yes ] || die "Cancelled"
+if [ -z "$INSTALL" ]; then
+    printf 'Type yes to continue / Escribe yes para seguir: '
+    read OK; [ "$OK" = yes ] || die "Cancelled"
+fi
 
-make_writer || die "$FW_UPDATE has changed, nothing was changed"
+make_writer || die "$FW_UPDATE has changed, or the boot environment has more than one bootcmd variable (fw_printenv | grep bootcmd). Nothing was changed"
 other_bank_boot || die "$FW_UPDATE has changed (unexpected boot settings), nothing was changed"
 
 # From here on a closed SSH session or Ctrl-C must not stop the script half way
-trap '' HUP INT TERM QUIT
+trap '' HUP INT TERM QUIT PIPE
 
 # The boot is not touched while writing: until the final switch the gateway keeps booting the
 # running firmware, so a power cut at any point leaves it as it was
@@ -215,6 +257,13 @@ say "* Verifying what was written"
 [ "$(head -c "$RSIZE" "$R/dev/mtd${ROOT_OTHER}ro" | sha256sum | cut -d' ' -f1)" = "$RSHA" ] || die "Rootfs verify failed, boot left on the current firmware"
 rootfs_check "$ROOT_OTHER" || die "The new rootfs does not mount, boot left on the current firmware"
 say "  Verified: $OTHER_VERSION"
+
+if [ -n "$TRIAL" ]; then
+    # One boot of the new firmware: unless it is kept there, the next boot comes back to this one
+    say "* Trial boot"
+    rm -rf "$WORK"
+    exec "$BOOT" try
+fi
 
 say "* Switching the boot"
 set_boot "$NEW_BOOTCMD" "$NEW_BOOTARGS" || { set_boot "$OLD_BOOTCMD" "$OLD_BOOTARGS"; die "Boot was not switched, left on the current firmware"; }

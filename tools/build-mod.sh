@@ -11,7 +11,10 @@ set -eu
 
 STOCK_VER=$1   # e.g. 1.0.5_0016
 MOD_DATE=$2    # e.g. 20261016
-NAME=mgl001_${STOCK_VER}_mod${MOD_DATE}
+# VARIANT=lan: no Xiaomi service at all (see mod/lan/). VARIANT=lan: sin ningún servicio de Xiaomi.
+VARIANT=${VARIANT:-mod}
+case "$VARIANT" in mod|lan) ;; *) echo "! VARIANT must be mod or lan"; exit 1 ;; esac
+NAME=mgl001_${STOCK_VER}_${VARIANT}${MOD_DATE}
 STOCK=firmware/stock/mgl001_$STOCK_VER
 DEST=firmware/custom/$NAME
 BIN=build/out/bin
@@ -62,6 +65,58 @@ sh -n "$FWM" || { echo "! fw_manager.sh has a syntax error"; exit 1; }
 cp -a mod/overlay/. "$WORK/"
 chmod 755 "$WORK/usr/sbin/mgl001_mod_access.sh" "$WORK/usr/sbin/mgl001-ota"
 chmod 644 "$WORK/etc/ssl/cert.pem"
+
+# 2b. LAN variant: no Xiaomi service. The trial-boot check runs right after the last mdev (it needs
+# /dev/mtd for the U-Boot environment), our init replaces fw_manager.sh -r, Wi-Fi is not loaded and
+# the Xiaomi service binaries are removed so nothing can start them.
+# Variante LAN: la comprobación del arranque de prueba va justo tras el último mdev, nuestro arranque
+# sustituye a fw_manager.sh -r, la wifi no se carga y se quitan los binarios de los servicios de Xiaomi.
+if [ "$VARIANT" = lan ]; then
+    [ "$(grep -cx '/sbin/mdev -s' "$RCS")" = 2 ] || { echo "! rcS mdev anchor changed"; exit 1; }
+    awk 'BEGIN { n = 0 }
+         { print }
+         $0 == "/sbin/mdev -s" { n++; if (n == 2) print "/usr/sbin/mgl001-boot boot" }' "$RCS" > "$RCS.new"
+    mv "$RCS.new" "$RCS"
+    [ "$(grep -c '^    fw_manager.sh -r$' "$RCS")" = 1 ] || { echo "! rcS fw_manager anchor changed"; exit 1; }
+    awk '
+        $0 == "if [ -x ${CUSTOM_POST_INIT} ]; then" { skip = 1; next }
+        skip && $0 == "fi" { skip = 0; print "# mgl001_fw lan: no Xiaomi services"; print "/usr/sbin/mgl001_lan_init.sh"; next }
+        !skip { print }' "$RCS" > "$RCS.new"
+    mv "$RCS.new" "$RCS"
+    chmod 755 "$RCS"
+    grep -qx '/usr/sbin/mgl001-boot boot' "$RCS" || { echo "! rcS was not patched (trial boot)"; exit 1; }
+    grep -qx '/usr/sbin/mgl001_lan_init.sh' "$RCS" || { echo "! rcS was not patched (lan init)"; exit 1; }
+    ! grep -q 'fw_manager.sh -r' "$RCS" || { echo "! rcS still starts fw_manager.sh"; exit 1; }
+    sh -n "$RCS" || { echo "! rcS has a syntax error"; exit 1; }
+
+    DRV=$WORK/bin/driver_modules.sh
+    for m in cfg80211 mac80211 ssw105at; do
+        grep -q "^insmod /lib/modules/4.9.84/$m.ko" "$DRV" || { echo "! driver_modules.sh: $m not found"; exit 1; }
+        sed -i "s|^insmod /lib/modules/4.9.84/$m.ko|# mgl001_fw lan, no Wi-Fi: &|" "$DRV"
+    done
+    sh -n "$DRV" || { echo "! driver_modules.sh has a syntax error"; exit 1; }
+
+    for b in miio_client miio_agent mha_basis mha_master mijia_automation miio_bt mZ3GatewayHost_MQTT \
+             mzigbee_agent ot_service http_service matter_gateway_service translation_service central_lite \
+             miio_client_helper_nomqtt.sh app_monitor.sh log_monitor.sh query_zgb.sh wifi_start.sh \
+             miio_recv_line mdnsd; do
+        [ -f "$WORK/bin/$b" ] || { echo "! /bin/$b not found"; exit 1; }
+        rm -f "$WORK/bin/$b"
+    done
+
+    cp -a mod/lan/overlay/. "$WORK/"
+    # The native Home Assistant device (tools/build-hass.sh) and the installer it runs for updates
+    # El dispositivo nativo de Home Assistant y el instalador que usa para las actualizaciones
+    [ -s "$BIN/mgl001-hass" ] || { echo "! $BIN/mgl001-hass missing: run tools/build-hass.sh"; exit 1; }
+    cp "$BIN/mgl001-hass" "$WORK/usr/bin/mgl001-hass"
+    ln -sf mgl001-hass "$WORK/usr/bin/mgl001-zigbee"   # the Zigbee bridge service / el servicio del puente Zigbee
+    cp firmware/mgl001_update.sh "$WORK/usr/sbin/mgl001_update.sh"
+    chmod 755 "$WORK/usr/sbin/mgl001_lan_init.sh" "$WORK/usr/sbin/mgl001-boot" "$WORK/usr/share/mgl001/udhcpc.script" \
+        "$WORK/usr/bin/mgl001-hass" "$WORK/usr/sbin/mgl001_update.sh"
+    for f in usr/sbin/mgl001_lan_init.sh usr/sbin/mgl001-boot usr/share/mgl001/udhcpc.script usr/sbin/mgl001_update.sh; do
+        sh -n "$WORK/$f" || { echo "! $f has a syntax error"; exit 1; }
+    done
+fi
 
 # 3. Tools
 for b in dropbearmulti $TOOLS; do cp "$BIN/$b" "$WORK/usr/bin/"; done

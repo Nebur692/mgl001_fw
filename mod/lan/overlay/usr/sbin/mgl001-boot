@@ -1,0 +1,146 @@
+#!/bin/sh
+# mgl001_fw: trial boot of the other firmware bank.
+#   mgl001-boot try     switch to the other bank for ONE boot (from the running firmware) and reboot
+#   mgl001-boot keep    on the new firmware: make it the permanent one
+#   mgl001-boot back    boot the other bank again from now on (does not reboot)
+#   mgl001-boot status  show which bank runs and which boots next
+#   mgl001-boot boot    called by rcS very early: if this is a trial boot, the NEXT boot goes back
+# A trial firmware that hangs, loses the network or is power-cycled comes back to the old one by
+# itself: rcS of the new firmware points the boot back to the old bank before starting anything.
+# This needs the trial firmware to reach rcS: a kernel that panics before it is not covered.
+#
+# mgl001_fw: arranque de prueba del otro banco de firmware.
+#   try: cambia al otro banco para UN arranque y reinicia. keep: en el firmware nuevo, lo deja fijo.
+#   back: vuelve a arrancar el otro banco a partir de ahora. status: qué banco corre y cuál arranca.
+#   boot: lo llama rcS al principio; si es un arranque de prueba, el SIGUIENTE vuelve al banco viejo.
+# Si el firmware de prueba se cuelga, pierde la red o se desenchufa, vuelve solo al anterior (siempre
+# que llegue a rcS: un kernel que se cuelgue antes no queda cubierto).
+#
+# Variable names never contain "bootcmd" or "bootargs": Xiaomi's fw_update.sh picks the kernel bank with
+# `fw_printenv | grep bootcmd`, and a second matching line makes it write the RUNNING kernel.
+# Los nombres nunca llevan «bootcmd» ni «bootargs»: fw_update.sh de Xiaomi elige el banco con
+# `fw_printenv | grep bootcmd` y una segunda línea le hace escribir el kernel EN USO.
+#   mgl001_tcmd/mgl001_targs  trial armed: the boot to go back to / prueba armada: el arranque de vuelta
+#   mgl001_kcmd/mgl001_kargs  trial running: the boot that keeps it / prueba en marcha: el que la deja fija
+
+R=${MGL001_ROOT:-}   # only for tests / solo para pruebas
+FWP=$R/etc/fw_printenv
+FWS=$R/etc/fw_setenv
+FW_UPDATE=$R/bin/fw_update.sh
+
+env_get() { "$FWP" "$1" 2>/dev/null | cut -d= -f2-; }
+# Reads "name value" lines; one write for all of them. Never feed it from a pipeline that calls env_get:
+# fw_setenv takes the environment lock as it starts, so a fw_printenv on the other side of the pipe waits
+# for it forever while fw_setenv waits for its input. Read every value into a variable first.
+# Nunca alimentarla con una tubería que llame a env_get: fw_setenv coge el cerrojo al empezar y los dos
+# lados se esperan para siempre. Primero se leen los valores a variables.
+env_write() { "$FWS" -s - >/dev/null 2>&1; }
+running_rootfs() { grep -o 'root=/dev/mtdblock[78]' "$R/proc/cmdline" | grep -o '[78]$'; }
+rootfs_of() { echo "$1" | grep -o 'root=/dev/mtdblock[78]' | grep -o '[78]$'; }
+next_rootfs() { rootfs_of "$(env_get bootargs)"; }
+kernel_name() { if [ "$1" = 7 ]; then echo KERNEL; else echo KERNEL_BAK; fi; }   # 7<->KERNEL, 8<->KERNEL_BAK
+
+# bootcmd/bootargs that boot rootfs bank $1, built with Xiaomi's own fw_update.sh functions
+values_for() { # rootfs-bank -> sets V_CMD and V_ARGS
+    tmp=$R/tmp/mgl001-boot.$$
+    sed -n '/^set_kernel_partitions()/,/^}/p;/^set_rootfs_partitions()/,/^}/p' "$FW_UPDATE" |
+        sed 's#[^ ]*/etc/fw_setenv #boot_value #' > "$tmp"
+    boot_value() { echo "$2"; }
+    . "$tmp"; rm -f "$tmp"
+    command -v set_kernel_partitions >/dev/null && command -v set_rootfs_partitions >/dev/null || return 1
+    # Xiaomi's set_kernel_partitions X boots the kernel that is NOT X first: pass the other bank's
+    # La función de Xiaomi set_kernel_partitions X arranca primero el kernel que NO es X
+    V_CMD=$(set_kernel_partitions "$(kernel_name $(( 15 - $1 )))")
+    if [ "$1" = 8 ]; then V_ARGS=$(set_rootfs_partitions x); else V_ARGS=$(set_rootfs_partitions ""); fi
+    echo "$V_ARGS" | grep -q "^root=/dev/mtdblock$1 " && [ "$(echo "$V_CMD" | awk '{print $4}')" = "$(kernel_name "$1")" ]
+}
+
+# The bank must come back by itself: its rcS has to run "mgl001-boot boot" (a stock or mod firmware does not)
+# El banco tiene que volver solo: su rcS debe ejecutar «mgl001-boot boot» (uno original o mod no lo hace)
+bank_can_trial() { # rootfs-bank
+    m=$R/tmp/mgl001-boot-mnt.$$
+    mkdir -p "$m"
+    mount -t squashfs -o ro "$R/dev/mtdblock$1" "$m" 2>/dev/null || { rmdir "$m"; return 1; }
+    ok=0
+    [ -x "$m/usr/sbin/mgl001-boot" ] && grep -qx '/usr/sbin/mgl001-boot boot' "$m/etc/init.d/rcS" && ok=1
+    umount "$m"; rmdir "$m"
+    [ "$ok" = 1 ]
+}
+
+case "$1" in
+boot)
+    # So early in rcS /var is a fresh tmpfs: fw_printenv needs /var/lock for its lock or it reads nothing
+    # Tan pronto en rcS, /var es un tmpfs recién montado: sin /var/lock, fw_printenv no lee nada
+    mkdir -p "$R/var/lock"
+    TC=$(env_get mgl001_tcmd); TA=$(env_get mgl001_targs)
+    # The first mgl001-boot (17-10-2026) armed trials with names that contain "bootcmd"/"bootargs": a
+    # firmware updated from it arrives here with those. Understood once, then removed with the rest.
+    # El primer mgl001-boot armaba la prueba con nombres que llevan «bootcmd»: se entienden y se borran.
+    OLD=$(env_get mgl001_trial_bootcmd)$(env_get mgl001_keep_bootcmd)
+    if [ -z "$TC" ] && [ -n "$(env_get mgl001_trial_bootcmd)" ]; then
+        TC=$(env_get mgl001_trial_bootcmd); TA=$(env_get mgl001_trial_bootargs)
+    fi
+    LEGACY='mgl001_trial_bootcmd\nmgl001_trial_bootargs\nmgl001_keep_bootcmd\nmgl001_keep_bootargs\n'
+    if [ -z "$TC" ]; then
+        # No trial armed. Keep values that point to another bank are left from a trial that went back
+        # (power cut, watchdog, or not kept in time): drop them, or keep/try would act on them later.
+        # Sin prueba armada. Si quedan valores «keep» de otro banco, son de una prueba que volvió: se borran.
+        KA=$(env_get mgl001_kargs)
+        if { [ -n "$KA" ] && [ "$(rootfs_of "$KA")" != "$(running_rootfs)" ]; } || [ -n "$OLD" ]; then
+            printf "mgl001_kcmd\nmgl001_kargs\n$LEGACY" | env_write
+            echo "mgl001-boot: an earlier trial was not kept, its leftovers were removed" > "$R/dev/kmsg" 2>/dev/null
+        fi
+        exit 0
+    fi
+    [ -n "$TA" ] || exit 1
+    # This is the trial boot: keep what runs now as "keep" values, point the next boot back.
+    NC=$(env_get bootcmd); NA=$(env_get bootargs)
+    printf "mgl001_kcmd %s\nmgl001_kargs %s\nbootcmd %s\nbootargs %s\nmgl001_tcmd\nmgl001_targs\n$LEGACY" \
+        "$NC" "$NA" "$TC" "$TA" | env_write
+    echo "mgl001-boot: trial boot, the next boot goes back to the previous bank" > "$R/dev/kmsg" 2>/dev/null
+    ;;
+try)
+    [ "$(running_rootfs)" = "$(next_rootfs)" ] || { echo "! A boot change is already waiting for a reboot"; exit 1; }
+    [ -z "$(env_get mgl001_kcmd)" ] || { echo "! A trial is still open: run keep or back first"; exit 1; }
+    OTHER=$(( 15 - $(running_rootfs) ))   # 7 <-> 8
+    bank_can_trial "$OTHER" || { echo "! Bank $OTHER would not come back by itself (no mgl001-boot in its rcS): install it without --trial"; exit 1; }
+    values_for "$OTHER" || { echo "! Could not build the boot values"; exit 1; }
+    OC=$(env_get bootcmd); OA=$(env_get bootargs)
+    # Say it first: from the write on, nothing may print (a closed pipe would stop us half way)
+    # Se avisa antes: desde la escritura no se imprime nada (una tubería cerrada nos pararía a medias)
+    echo "Trial boot of bank $OTHER. Rebooting. If it does not come back, unplug and plug the gateway: it returns to bank $(running_rootfs)."
+    trap '' HUP INT TERM QUIT PIPE
+    printf 'mgl001_tcmd %s\nmgl001_targs %s\nbootcmd %s\nbootargs %s\n' \
+        "$OC" "$OA" "$V_CMD" "$V_ARGS" | env_write
+    if [ "$(env_get bootargs)" = "$V_ARGS" ] && [ "$(env_get bootcmd)" = "$V_CMD" ]; then
+        sync; reboot; exit 0
+    fi
+    echo "! The boot settings did not change" 2>/dev/null
+    exit 1
+    ;;
+keep)
+    KC=$(env_get mgl001_kcmd); KA=$(env_get mgl001_kargs)
+    [ -n "$KC" ] && [ -n "$KA" ] || { echo "! No trial boot to keep"; exit 1; }
+    [ "$(rootfs_of "$KA")" = "$(running_rootfs)" ] || { echo "! The trial was for bank $(rootfs_of "$KA"), not the running one: nothing to keep"; exit 1; }
+    printf 'bootcmd %s\nbootargs %s\nmgl001_kcmd\nmgl001_kargs\n' "$KC" "$KA" | env_write
+    [ "$(next_rootfs)" = "$(running_rootfs)" ] || { echo "! The boot settings did not change"; exit 1; }
+    echo "Kept: bank $(running_rootfs) boots from now on."
+    ;;
+back)
+    OTHER=$(( 15 - $(running_rootfs) ))
+    values_for "$OTHER" || { echo "! Could not build the boot values"; exit 1; }
+    printf 'bootcmd %s\nbootargs %s\nmgl001_kcmd\nmgl001_kargs\nmgl001_tcmd\nmgl001_targs\nmgl001_trial_bootcmd\nmgl001_trial_bootargs\nmgl001_keep_bootcmd\nmgl001_keep_bootargs\n' \
+        "$V_CMD" "$V_ARGS" | env_write
+    [ "$(next_rootfs)" = "$OTHER" ] || { echo "! The boot settings did not change"; exit 1; }
+    echo "Bank $OTHER boots from the next reboot on. Reboot when you want: reboot"
+    ;;
+status)
+    echo "running: bank $(running_rootfs) ($(cat "$R/etc/mgl001_fw_mod" 2>/dev/null || echo stock))"
+    echo "next boot: bank $(next_rootfs)"
+    [ -n "$(env_get mgl001_kcmd)" ] && echo "trial boot: run 'mgl001-boot keep' to keep this firmware"
+    [ -n "$(env_get mgl001_tcmd)" ] && echo "trial boot armed for the next reboot"
+    exit 0
+    ;;
+*)
+    sed -n '2,7p' "$0"; exit 1 ;;
+esac

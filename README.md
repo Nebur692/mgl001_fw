@@ -30,8 +30,11 @@ Each modified firmware is the matching stock Xiaomi firmware, untouched, plus te
 - **Verified install**: checks model and flash layout, free memory, the GitHub certificate and SHA-256 of what it downloads, re-reads what it wrote, mounts the new rootfs and runs its shell before switching. It refuses to start if a boot switch is still waiting for a reboot.
 - **No downgrades**: refuses to install a firmware older than the one running, because a Xiaomi update also reflashes the Zigbee chip and an older build may not work with it. Going back with `r` to an older bank warns and asks you to type `older`.
 - **Reproducible**: `tools/build-tools.sh` and `tools/build-mod.sh` rebuild everything from the stock firmware; nothing is prebuilt by hand.
+- **LAN variant**: no Xiaomi service at all; the gateway becomes a native Home Assistant device and a Zigbee coordinator for ZHA, updated from Home Assistant with a trial boot that comes back by itself (see [Usage](#-usage)).
 
 Firmwares included: `1.0.5_0016` and `1.0.8_0013`, each stock and modified.
+
+**Zigbee chip for ZHA / Zigbee2MQTT**: [`zigbee/`](zigbee/) has an EmberZNet 7.5.1 coordinator firmware for the Hub 2's EFR32MG21 (EZSP 13, 64 children), Xiaomi's stock one to go back, and how to flash them without opening the case.
 
 ### 📦 Installation
 
@@ -73,6 +76,44 @@ command_line:
       value_template: "{{ value == 'locked' }}"
 ```
 
+#### LAN variant: a native Home Assistant device
+
+The firmwares named `mgl001_<version>_lan<date>` remove every Xiaomi service: cloud, Mi Home, Matter, Xiaomi Bluetooth and Wi‑Fi. The gateway becomes a Home Assistant device (ESPHome API) and a network Zigbee coordinator for ZHA, both found by Home Assistant by itself. It keeps wired Ethernet with DHCP (same host name and MAC address as the stock firmware), NTP time in the time zone Mi Home saved, telnet and SSH, and the hardware watchdog.
+
+**Before you start**
+
+- The gateway must be connected **by Ethernet cable** (there is no Wi‑Fi in this variant) and run a firmware of this repository (telnet or SSH open).
+- **Mi Home will no longer see the gateway**, and Zigbee devices paired in Mi Home must be **paired again in ZHA**.
+
+**Set it up, step by step**
+
+1. **Install the LAN firmware.** Run the installer (see *Installation*) and choose the line that contains `_lan`. The gateway reboots into it; in about a minute you can log in again with telnet or SSH.
+2. **Add the gateway to Home Assistant.** On the gateway, show its encryption key with `cat /data/mgl001/api_key`. In Home Assistant open **Settings → Devices & services**: the gateway appears as a discovered **ESPHome** device. Press **Add** and paste the key. If it does not appear, use **Add integration → ESPHome**, host `GATEWAY_IP`, port `6053`.
+3. **Add the Zigbee coordinator to ZHA.** In the same page a discovered **Zigbee Home Automation** device appears, *Xiaomi Hub 2 Zigbee*. Press **Add** and follow the steps; to bring an existing Zigbee network, restore its ZHA backup when asked. If it does not appear: **Add integration → Zigbee Home Automation** and type `socket://GATEWAY_IP:6638` as the serial device path. The [`zigbee/`](zigbee/) folder has a newer coordinator firmware for up to 64 end devices.
+4. **Optional — no Bluetooth proxy.** The Bluetooth proxy (passive, active and automatic scanning, connections, pairing) is experimental. To turn it off: `echo -no-bt > /data/mgl001/hass.args` and `reboot`.
+
+**Coming from openmiio_agent?** The Zigbee bridge is now part of the firmware (TCP port 6638). Delete the `openmiio_agent` line from `/data/run.sh` and `reboot`. Then, in Home Assistant: **Settings → Devices & services → Zigbee Home Automation → Configure → Submit → Change the current adapter's settings**. In **Serial device path** type `socket://GATEWAY_IP:6638`, then choose **Migrate manually → Keep adapter network settings**. The network and the paired devices stay as they are.
+
+**Updates from Home Assistant**
+
+- The gateway's **Firmware** update entity checks `firmware/list.txt` of this repository two minutes after boot, every six hours, and when you press **Check for updates**.
+- **Install** writes the firmware bank that is not in use and boots it **once, as a trial**. Zigbee stops for one or two minutes.
+- The new firmware stays only when ZHA and Home Assistant are connected again. If they are not within ten minutes, the gateway goes back to the previous firmware by itself. Unplugging the gateway during the trial also goes back.
+
+**On the gateway**
+
+| Command | What it does |
+|---|---|
+| `mgl001-boot status` | Which bank runs and which one boots next |
+| `mgl001-boot try` | Boots the other bank once, as a trial (it reboots) |
+| `mgl001-boot keep` | On a trial: keeps this firmware |
+| `mgl001-boot back && reboot` | Goes back to the firmware in the other bank |
+| `cat /var/log/messages` | Log of the system and of its two services: `mgl001-zigbee` (the Zigbee bridge) and `mgl001-hass` (the Home Assistant device) |
+
+Each service restarts by itself if it stops, and they are independent: restarting the Home Assistant device never cuts Zigbee. Their options go in `/data/mgl001/zigbee.args` and `/data/mgl001/hass.args`.
+
+**Entities in Home Assistant**: RGB LED, the button (press, double press, long press), Zigbee bridge connected, uptime, free memory, load, free storage, firmware, firmware bank, restart button and firmware update. Without Mi Home, recovery level 2 below does not apply; telnet and SSH stay open as on the modified firmware.
+
 ### 🩹 Recovery — if you lose access
 
 With a modified firmware installed you have access on three levels, none needing to open the case:
@@ -86,10 +127,14 @@ With a modified firmware installed you have access on three levels, none needing
 ```sh
 docker run --rm -v "$PWD":/w -w /w alpine:3 sh tools/build-tools.sh          # tools -> build/out/bin
 docker run --rm -v "$PWD":/w -w /w alpine:3 sh tools/build-mod.sh 1.0.8_0013 20261016.2
+docker run --rm -v "$PWD":/w -w /w golang:1.27.2 sh tools/build-hass.sh      # LAN variant: mgl001-hass -> build/out/bin
+docker run --rm -e VARIANT=lan -v "$PWD":/w -w /w alpine:3 sh tools/build-mod.sh 1.0.8_0013 20261017.2
 sh tools/make-list.sh                                                        # refresh firmware/list.txt
 ```
 
 To add a new stock version, read the 12 NAND partitions of a gateway running it (read-only), put its kernel and `rootfs.sqfs` under `firmware/stock/mgl001_<version>/`, and run the two scripts above.
+
+The trial boot has its own bench (an environment file and a stock `fw_update.sh`): `sh tools/test-mgl001-boot.sh mod/lan/overlay/usr/sbin/mgl001-boot <stock rootfs>/bin/fw_update.sh <file with bootcmd= and bootargs=>`.
 
 ### 💙 Support
 
@@ -117,8 +162,11 @@ Cada firmware modificado es el firmware original de Xiaomi que le corresponde, s
 - **Instalación verificada**: comprueba el modelo y la estructura de la memoria, la memoria libre, el certificado de GitHub y el SHA-256 de lo que descarga, relee lo que graba, monta el sistema nuevo y ejecuta su shell antes de cambiar. No empieza si hay un cambio de arranque pendiente de reiniciar.
 - **Sin bajar de versión**: se niega a instalar un firmware más antiguo que el que está en uso, porque una actualización de Xiaomi también regraba el chip Zigbee y una versión anterior podría no entenderse con él. Volver con `r` a una copia más antigua avisa y pide escribir `older`.
 - **Reproducible**: `tools/build-tools.sh` y `tools/build-mod.sh` reconstruyen todo a partir del firmware original; nada está precompilado a mano.
+- **Variante LAN**: sin ningún servicio de Xiaomi; la pasarela pasa a ser un dispositivo nativo de Home Assistant y un coordinador Zigbee para ZHA, que se actualiza desde Home Assistant con un arranque de prueba que vuelve solo (ver [Uso](#-uso)).
 
 Firmwares incluidos: `1.0.5_0016` y `1.0.8_0013`, cada uno original y modificado.
+
+**Chip Zigbee para ZHA / Zigbee2MQTT**: en [`zigbee/`](zigbee/) hay un firmware de coordinador EmberZNet 7.5.1 para el EFR32MG21 de la Hub 2 (EZSP 13, 64 hijos), el de fábrica de Xiaomi para volver, y cómo flashearlos sin abrir la carcasa.
 
 ### 📦 Instalación
 
@@ -160,6 +208,44 @@ command_line:
       value_template: "{{ value == 'locked' }}"
 ```
 
+#### Variante LAN: un dispositivo nativo de Home Assistant
+
+Los firmwares llamados `mgl001_<versión>_lan<fecha>` quitan todos los servicios de Xiaomi: nube, Mi Home, Matter, Bluetooth de Xiaomi y wifi. La pasarela pasa a ser un dispositivo de Home Assistant (API de ESPHome) y un coordinador Zigbee en red para ZHA, y Home Assistant encuentra los dos solo. Conserva la red por cable con DHCP (el mismo nombre y la misma dirección MAC que el firmware original), la hora por NTP en la zona horaria que guardó Mi Home, telnet y SSH, y el vigilante de hardware.
+
+**Antes de empezar**
+
+- La pasarela tiene que estar conectada **por cable de red** (esta variante no tiene wifi) y llevar un firmware de este repositorio (telnet o SSH abiertos).
+- **Mi Home dejará de ver la pasarela**, y los dispositivos Zigbee emparejados en Mi Home hay que **volver a emparejarlos en ZHA**.
+
+**Puesta en marcha, paso a paso**
+
+1. **Instala el firmware LAN.** Ejecuta el instalador (ver *Instalación*) y elige la línea que contiene `_lan`. La pasarela reinicia con él; en un minuto más o menos puedes volver a entrar por telnet o SSH.
+2. **Añade la pasarela a Home Assistant.** En la pasarela, muestra su clave de cifrado con `cat /data/mgl001/api_key`. En Home Assistant abre **Ajustes → Dispositivos y servicios**: la pasarela aparece como dispositivo **ESPHome** descubierto. Pulsa **Añadir** y pega la clave. Si no aparece, usa **Añadir integración → ESPHome**, host `GATEWAY_IP`, puerto `6053`.
+3. **Añade el coordinador Zigbee a ZHA.** En la misma página aparece un **Zigbee Home Automation** descubierto, *Xiaomi Hub 2 Zigbee*. Pulsa **Añadir** y sigue los pasos; para traer una red Zigbee que ya tienes, restaura su copia de ZHA cuando te lo pregunte. Si no aparece: **Añadir integración → Zigbee Home Automation** y escribe `socket://GATEWAY_IP:6638` como ruta del dispositivo serie. En la carpeta [`zigbee/`](zigbee/) hay un firmware de coordinador más nuevo, para hasta 64 dispositivos finales.
+4. **Opcional — sin proxy Bluetooth.** El proxy Bluetooth (escaneo pasivo, activo y automático, conexiones, emparejamiento) es experimental. Para apagarlo: `echo -no-bt > /data/mgl001/hass.args` y `reboot`.
+
+**¿Vienes de openmiio_agent?** El puente Zigbee ya forma parte del firmware (puerto TCP 6638). Borra la línea de `openmiio_agent` de `/data/run.sh` y haz `reboot`. Después, en Home Assistant: **Ajustes → Dispositivos y servicios → Zigbee Home Automation → Configurar → Enviar → Cambiar la configuración del adaptador actual**. En **Ruta del dispositivo serie** escribe `socket://GATEWAY_IP:6638` y elige **Migrar manualmente → Mantener la configuración de red del adaptador**. La red y los dispositivos emparejados se quedan como están.
+
+**Actualizaciones desde Home Assistant**
+
+- La entidad de actualización **Firmware** de la pasarela consulta `firmware/list.txt` de este repositorio dos minutos después de arrancar, cada seis horas y cuando pulsas **Buscar actualizaciones**.
+- **Instalar** graba el banco de firmware que no está en uso y lo arranca **una vez, de prueba**. El Zigbee se para uno o dos minutos.
+- El firmware nuevo solo se queda cuando ZHA y Home Assistant vuelven a estar conectados. Si no lo están en diez minutos, la pasarela vuelve sola al firmware anterior. Desenchufarla durante la prueba también la devuelve.
+
+**En la pasarela**
+
+| Orden | Qué hace |
+|---|---|
+| `mgl001-boot status` | Qué banco corre y cuál arranca después |
+| `mgl001-boot try` | Arranca una vez el otro banco, de prueba (reinicia) |
+| `mgl001-boot keep` | En una prueba: se queda con este firmware |
+| `mgl001-boot back && reboot` | Vuelve al firmware del otro banco |
+| `cat /var/log/messages` | Registro del sistema y de sus dos servicios: `mgl001-zigbee` (el puente Zigbee) y `mgl001-hass` (el dispositivo de Home Assistant) |
+
+Cada servicio vuelve a arrancar solo si se para, y son independientes: reiniciar el dispositivo de Home Assistant nunca corta el Zigbee. Sus opciones van en `/data/mgl001/zigbee.args` y `/data/mgl001/hass.args`.
+
+**Entidades en Home Assistant**: LED RGB, el botón (pulsación, doble pulsación y pulsación larga), puente Zigbee conectado, tiempo encendida, memoria libre, carga, almacenamiento libre, firmware, banco de firmware, botón de reinicio y actualización de firmware. Sin Mi Home, el nivel 2 de recuperación de abajo no aplica; telnet y SSH siguen abiertos como en el firmware modificado.
+
 ### 🩹 Recuperación — si pierdes el acceso
 
 Con un firmware modificado instalado tienes acceso por tres niveles, ninguno necesita abrir la carcasa:
@@ -173,10 +259,14 @@ Con un firmware modificado instalado tienes acceso por tres niveles, ninguno nec
 ```sh
 docker run --rm -v "$PWD":/w -w /w alpine:3 sh tools/build-tools.sh          # herramientas -> build/out/bin
 docker run --rm -v "$PWD":/w -w /w alpine:3 sh tools/build-mod.sh 1.0.8_0013 20261016.2
+docker run --rm -v "$PWD":/w -w /w golang:1.27.2 sh tools/build-hass.sh      # variante LAN: mgl001-hass -> build/out/bin
+docker run --rm -e VARIANT=lan -v "$PWD":/w -w /w alpine:3 sh tools/build-mod.sh 1.0.8_0013 20261017.2
 sh tools/make-list.sh                                                        # regenera firmware/list.txt
 ```
 
 Para añadir una versión original nueva, lee las 12 particiones de la memoria NAND de una pasarela que la tenga (solo lectura), pon su kernel y su `rootfs.sqfs` en `firmware/stock/mgl001_<versión>/`, y ejecuta los dos guiones de arriba.
+
+El arranque de prueba tiene su propio banco (un fichero de entorno y un `fw_update.sh` original): `sh tools/test-mgl001-boot.sh mod/lan/overlay/usr/sbin/mgl001-boot <rootfs original>/bin/fw_update.sh <fichero con bootcmd= y bootargs=>`.
 
 ### 💙 Apoya el proyecto
 
