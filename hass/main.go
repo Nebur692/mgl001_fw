@@ -45,6 +45,9 @@ var (
 	flagZbUART   = flag.String("zigbee-uart", "/dev/ttyS1", "Zigbee coordinator UART")
 	flagZbNoFlow = flag.Bool("zigbee-no-flow", false, "no RTS/CTS on the Zigbee UART (tests on a pseudo-terminal)")
 	flagZbInfo   = flag.String("zigbee-info", "/tmp/mgl001-zigbee-info", "where the bridge leaves the Zigbee chip's firmware for mgl001-hass (RAM)")
+	flagHostFile = flag.String("hostname-file", "/data/mgl001/hostname", "host name set from Home Assistant (mgl001_lan_init.sh uses it at boot)")
+	flagHostDry  = flag.Bool("hostname-dry", false, "save the host name but do not apply it (tests)")
+	flagNodeFile = flag.String("node-name-file", "/data/mgl001/node_name", "the ESPHome device name, fixed the first time")
 	flagBtInfo   = flag.Bool("btinfo", false, "read the Bluetooth controller version and exit (read-only)")
 	flagBtDFU    = flag.String("btdfu", "", "flash this sealed Telink image to the Bluetooth controller and exit")
 	flagBtVer    = flag.Uint("btdfu-version", 3, "firmware version announced to the controller DFU")
@@ -82,25 +85,6 @@ func ifaceMAC(name string) string {
 		return strings.ToUpper(i.HardwareAddr.String())
 	}
 	return "00:00:00:00:00:00"
-}
-
-// ESPHome device names are lower case letters, digits and hyphens.
-func deviceName() string {
-	h, _ := os.Hostname()
-	h = strings.ToLower(h)
-	var b strings.Builder
-	for _, r := range h {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('-')
-		}
-	}
-	if b.Len() == 0 {
-		return "mgl001"
-	}
-	return b.String()
 }
 
 func main() {
@@ -167,7 +151,7 @@ func deviceInfo() *api.DeviceInfoResponse {
 	host, _ := os.Hostname()
 	info := &api.DeviceInfoResponse{
 		Name:                   srv.name,
-		FriendlyName:           productName + " (" + host + ")",
+		FriendlyName:           host,
 		MacAddress:             ifaceMAC("eth0"),
 		EsphomeVersion:         esphomeVersion,
 		CompilationTime:        buildTime,
@@ -217,6 +201,8 @@ func handle(c *Conn, m proto.Message) {
 		// nothing to send / nada que mandar
 	case *api.LightCommandRequest:
 		gw.LightCommand(r)
+	case *api.TextCommandRequest:
+		hostnameCommand(r)
 	case *api.ButtonCommandRequest:
 		gw.ButtonCommand(r)
 	case *api.GetTimeResponse:

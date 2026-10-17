@@ -34,7 +34,7 @@ func announce(name, mac string, port, zigbeePort int) {
 	host, _ := os.Hostname()
 	plainMAC := strings.ToLower(strings.ReplaceAll(mac, ":", ""))
 	go announceService(name, name, "_esphomelib._tcp", port, []string{
-		"friendly_name=" + productName + " (" + host + ")",
+		"friendly_name=" + host,
 		"version=" + esphomeVersion,
 		"mac=" + plainMAC,
 		"platform=Linux",

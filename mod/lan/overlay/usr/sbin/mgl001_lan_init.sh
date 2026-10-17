@@ -18,13 +18,29 @@ GETPROP=agetprop
 sleep 0.2
 /bin/zigbee_reset.sh 0 >/dev/null
 
-# Same MAC and host name as the stock firmware / La misma MAC y el mismo nombre que el original
+# Same MAC as the stock firmware / La misma MAC que el original
 LAN=$($GETPROP persist.sys.lan_name); [ -n "$LAN" ] || LAN=eth0
 MAC=$($GETPROP persist.sys.lan_mac)
 [ -n "$MAC" ] && ifconfig "$LAN" hw ether "$MAC"
 SUFFIX=$($GETPROP persist.sys.wlan_mac | cut -b 13-14,16-17 | tr '[a-f]' '[A-F]')
 [ -n "$SUFFIX" ] || SUFFIX=0000
-hostname "Mijia_Hub_V2-$SUFFIX"
+
+# Home Assistant knows the gateway by its ESPHome device name, which used to come from the host name
+# (Mijia_Hub_V2-XXXX). A gateway already paired keeps it, written once before the host name changes.
+# HA reconoce la pasarela por su nombre ESPHome, que antes salía del nombre de host: una ya emparejada lo
+# conserva, guardado una vez antes de cambiar el nombre de host.
+if [ ! -s /data/mgl001/node_name ] && [ -s /data/mgl001/api_key ]; then
+    echo "mijia-hub-v2-$SUFFIX" | tr 'A-F' 'a-f' > /data/mgl001/node_name
+fi
+
+# Host name: the one set from Home Assistant, or BurbuHub-XXXX (end of the MAC, as Xiaomi did)
+# Nombre de host: el puesto desde Home Assistant, o BurbuHub-XXXX (final de la MAC, como hacía Xiaomi)
+HOST=$(head -n 1 /data/mgl001/hostname 2>/dev/null)
+case "$HOST" in
+    ''|-*|*-|*[!A-Za-z0-9-]*) HOST="BurbuHub-$SUFFIX" ;;
+esac
+[ ${#HOST} -le 63 ] || HOST="BurbuHub-$SUFFIX"
+hostname "$HOST"
 
 # Time zone: Home Assistant's own (mgl001-hass keeps it in /data/mgl001/localtime when Home Assistant
 # connects); until then the one Mi Home saved (as Xiaomi's fw_manager.sh does), or UTC

@@ -108,6 +108,7 @@ func (g *Gateway) List() []proto.Message {
 		&api.ListEntitiesTextSensorResponse{ObjectId: "zigbee_protocol", Key: keyZbProtocol, Name: "Zigbee protocol", Icon: "mdi:zigbee", EntityCategory: diag()},
 		&api.ListEntitiesTextSensorResponse{ObjectId: "bluetooth_firmware", Key: keyBTFirmware, Name: "Bluetooth firmware", Icon: "mdi:bluetooth-settings", EntityCategory: diag()},
 		&api.ListEntitiesTextSensorResponse{ObjectId: "bluetooth_version", Key: keyBTVersion, Name: "Bluetooth version", Icon: "mdi:bluetooth", EntityCategory: diag()},
+		hostnameEntity(),
 	}
 	if bt != nil {
 		l = append(l, &api.ListEntitiesSensorResponse{ObjectId: "ble_adverts", Key: keyBTAdverts, Name: "Bluetooth advertisements",
@@ -127,7 +128,7 @@ func (g *Gateway) States() []proto.Message {
 	l := []proto.Message{g.ledStateMsg(), &api.BinarySensorStateResponse{Key: keyZigbee, State: g.zigbee},
 		&api.TextSensorStateResponse{Key: keyFirmware, State: displayName(firmwareName())},
 		&api.TextSensorStateResponse{Key: keyBank, State: bankName()},
-		&api.BinarySensorStateResponse{Key: keyEthLink, State: g.eth}}
+		&api.BinarySensorStateResponse{Key: keyEthLink, State: g.eth}, hostnameState()}
 	for k, v := range g.sensors {
 		l = append(l, &api.SensorStateResponse{Key: k, State: v})
 	}
