@@ -76,6 +76,7 @@ type Conn struct {
 	States   atomic.Bool // subscribed to entity states
 	Adverts  atomic.Bool // subscribed to raw BLE advertisements
 	ConnFree atomic.Bool
+	lastRx   atomic.Int64 // when the client last sent anything (unix ns) / cuándo mandó algo el cliente por última vez
 }
 
 func (s *Server) Listen(port int) error {
@@ -136,6 +137,8 @@ func (s *Server) serve(nc net.Conn) {
 	}
 	_ = nc.SetDeadline(time.Time{})
 	go c.writer()
+	c.lastRx.Store(time.Now().UnixNano())
+	go c.pinger()
 	s.mu.Lock()
 	if s.conns == nil {
 		s.conns = map[*Conn]bool{}
@@ -159,6 +162,7 @@ func (s *Server) serve(nc net.Conn) {
 			log.Printf("api: %s disconnected", c.Remote)
 			return
 		}
+		c.lastRx.Store(time.Now().UnixNano())
 		if m != nil {
 			s.handler(c, m)
 		}
@@ -286,6 +290,12 @@ func (c *Conn) readMessage() (proto.Message, error) {
 // that does not drain its queue is dropped, so it can never hold up the others.
 // Send deja el mensaje en la cola del escritor y nunca se bloquea. Un cliente que no la vacía se cierra.
 func (c *Conn) Send(m proto.Message) error {
+	// BLE advert batches are only news: when the queue is three quarters full they are dropped, as ESPHome
+	// does, and the session (with its Bluetooth connections) stays. Anything else still has to fit.
+	// Los lotes de anuncios BLE solo son novedades: con la cola a tres cuartos se tiran y la sesión sigue.
+	if _, adv := m.(*api.BluetoothLERawAdvertisementsResponse); adv && len(c.out) > outQueue*3/4 {
+		return nil
+	}
 	id, ok := idByName[m.ProtoReflect().Descriptor().FullName()]
 	if !ok {
 		return fmt.Errorf("no id for %s", m.ProtoReflect().Descriptor().FullName())

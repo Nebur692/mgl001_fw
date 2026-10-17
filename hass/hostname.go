@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -75,7 +76,7 @@ func hostnameState() *api.TextStateResponse {
 		}
 	}
 	h, _ := os.Hostname()
-	return &api.TextStateResponse{Key: keyHostname, State: h}
+	return &api.TextStateResponse{Key: keyHostname, State: h, MissingState: h == ""} // an empty text breaks HA's min length
 }
 
 // setHostname saves a new host name and applies it now. The router sees it from the next reboot: DHCP
@@ -110,3 +111,25 @@ func hostnameCommand(r *api.TextCommandRequest) {
 }
 
 func applyHostname(v string) error { return unix.Sethostname([]byte(v)) }
+
+// friendlyName is the device name Home Assistant shows. On a real ESPHome device it is fixed config, and
+// Home Assistant renames the device whenever it changes, so it does not follow the host name either:
+// the host name at the first start, kept next to the ESPHome name.
+// El nombre que enseña Home Assistant: en ESPHome es fijo y HA renombra el dispositivo si cambia, así que
+// tampoco sigue al nombre de host: el del primer arranque, guardado junto al nombre ESPHome.
+func friendlyName() string {
+	f := filepath.Join(filepath.Dir(*flagNodeFile), "friendly_name")
+	if b, err := os.ReadFile(f); err == nil {
+		if n := strings.TrimSpace(string(b)); n != "" {
+			return n
+		}
+	}
+	h, _ := os.Hostname()
+	if h == "" {
+		return productName
+	}
+	if err := writeFileAtomic(f, []byte(h+"\n"), 0644); err != nil {
+		log.Printf("name: %v", err)
+	}
+	return h
+}

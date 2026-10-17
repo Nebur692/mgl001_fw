@@ -67,11 +67,34 @@ bank_can_trial() { # rootfs-bank
     [ "$ok" = 1 ]
 }
 
+# The bank must be whole: squashfs and uImage signatures, and a rootfs that mounts with its rcS and shell.
+# A bank half erased by an interrupted install fails here; booting it would stop at the kernel, before rcS.
+# El banco tiene que estar entero: un banco a medio borrar por una instalación cortada se queda aquí.
+bank_bootable() { # rootfs-bank
+    [ "$(dd if="$R/dev/mtd${1}ro" bs=4 count=1 2>/dev/null)" = "hsqs" ] || return 1
+    [ "$(dd if="$R/dev/mtd$(( $1 - 2 ))ro" bs=4 count=1 2>/dev/null | hexdump -e '4/1 "%02x"')" = "27051956" ] || return 1
+    m=$R/tmp/mgl001-boot-mnt.$$
+    mkdir -p "$m"
+    mount -t squashfs -o ro "$R/dev/mtdblock$1" "$m" 2>/dev/null || { rmdir "$m"; return 1; }
+    ok=0
+    [ -x "$m/etc/init.d/rcS" ] && [ -x "$m/bin/busybox" ] && ok=1
+    umount "$m"; rmdir "$m"
+    [ "$ok" = 1 ]
+}
+
 case "$1" in
 boot)
     # So early in rcS /var is a fresh tmpfs: fw_printenv needs /var/lock for its lock or it reads nothing
     # Tan pronto en rcS, /var es un tmpfs recién montado: sin /var/lock, fw_printenv no lee nada
     mkdir -p "$R/var/lock"
+    # A failed read must not look like "no trial": the trial would become permanent without a word
+    # Una lectura fallida no puede parecer «sin prueba»: la prueba se quedaría fija sin avisar
+    n=0
+    until "$FWP" bootcmd >/dev/null 2>&1; do
+        n=$((n + 1))
+        [ $n -lt 5 ] || { echo "mgl001-boot: cannot read the boot settings" > "$R/dev/kmsg" 2>/dev/null; exit 1; }
+        sleep 1
+    done
     TC=$(env_get mgl001_tcmd); TA=$(env_get mgl001_targs)
     # The first mgl001-boot (17-10-2026) armed trials with names that contain "bootcmd"/"bootargs": a
     # firmware updated from it arrives here with those. Understood once, then removed with the rest.
@@ -103,6 +126,7 @@ try)
     [ "$(running_rootfs)" = "$(next_rootfs)" ] || { echo "! A boot change is already waiting for a reboot"; exit 1; }
     [ -z "$(env_get mgl001_kcmd)" ] || { echo "! A trial is still open: run keep or back first"; exit 1; }
     OTHER=$(( 15 - $(running_rootfs) ))   # 7 <-> 8
+    bank_bootable "$OTHER" || { echo "! Bank $OTHER does not hold a whole firmware: nothing was changed"; exit 1; }
     bank_can_trial "$OTHER" || { echo "! Bank $OTHER would not come back by itself (no mgl001-boot in its rcS): install it without --trial"; exit 1; }
     values_for "$OTHER" || { echo "! Could not build the boot values"; exit 1; }
     OC=$(env_get bootcmd); OA=$(env_get bootargs)
@@ -128,6 +152,7 @@ keep)
     ;;
 back)
     OTHER=$(( 15 - $(running_rootfs) ))
+    bank_bootable "$OTHER" || { echo "! Bank $OTHER does not hold a whole firmware: nothing was changed"; exit 1; }
     values_for "$OTHER" || { echo "! Could not build the boot values"; exit 1; }
     printf 'bootcmd %s\nbootargs %s\nmgl001_kcmd\nmgl001_kargs\nmgl001_tcmd\nmgl001_targs\nmgl001_trial_bootcmd\nmgl001_trial_bootargs\nmgl001_keep_bootcmd\nmgl001_keep_bootargs\n' \
         "$V_CMD" "$V_ARGS" | env_write

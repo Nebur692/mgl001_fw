@@ -12,7 +12,6 @@ import (
 	"log"
 	"math"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,6 +47,9 @@ type ledValue struct {
 	On         bool
 	Brightness float32
 	R, G, B    float32
+	// HA sends the colour scaled so its largest channel is 1, and the scale apart (0 in a file saved before)
+	// HA manda el color con su canal mayor a 1 y la escala aparte (0 en un fichero guardado antes)
+	ColorBrightness float32 `json:",omitempty"`
 }
 
 type Gateway struct {
@@ -117,9 +119,16 @@ func (g *Gateway) List() []proto.Message {
 	return l
 }
 
+func (l ledValue) colorScale() float32 {
+	if l.ColorBrightness <= 0 || l.ColorBrightness > 1 {
+		return 1
+	}
+	return l.ColorBrightness
+}
+
 func (g *Gateway) ledStateMsg() *api.LightStateResponse {
 	return &api.LightStateResponse{Key: keyLED, State: g.led.On, Brightness: g.led.Brightness, ColorMode: api.ColorMode_COLOR_MODE_RGB,
-		ColorBrightness: 1, Red: g.led.R, Green: g.led.G, Blue: g.led.B}
+		ColorBrightness: g.led.colorScale(), Red: g.led.R, Green: g.led.G, Blue: g.led.B}
 }
 
 func (g *Gateway) States() []proto.Message {
@@ -181,7 +190,7 @@ func (g *Gateway) applyLED() {
 		}
 		duty := 0
 		if g.led.On {
-			duty = int(math.Round(float64(v*g.led.Brightness) * pwmPeriod))
+			duty = int(math.Round(float64(v*g.led.Brightness*g.led.colorScale()) * pwmPeriod))
 		}
 		if err := pwmWrite(ch, "duty_cycle", strconv.Itoa(duty)); err != nil {
 			log.Printf("led: pwm%d: %v", ch, err)
@@ -209,6 +218,9 @@ func (g *Gateway) LightCommand(r *api.LightCommandRequest) {
 	if r.HasBrightness {
 		g.led.Brightness = r.Brightness
 	}
+	if r.HasColorBrightness {
+		g.led.ColorBrightness = r.ColorBrightness
+	}
 	if r.HasRgb {
 		g.led.R, g.led.G, g.led.B = r.Red, r.Green, r.Blue
 	}
@@ -223,7 +235,7 @@ func (g *Gateway) ButtonCommand(r *api.ButtonCommandRequest) {
 		log.Printf("restart requested from Home Assistant")
 		go func() {
 			time.Sleep(time.Second)
-			_ = exec.Command("reboot").Run()
+			rebootGateway()
 		}()
 	}
 }

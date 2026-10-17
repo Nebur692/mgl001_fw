@@ -132,6 +132,8 @@ func main() {
 	if err := srv.Listen(*flagPort); err != nil {
 		log.Fatal(err)
 	}
+	goodbyeOnSignal()
+	go timeSync()
 	go gw.Run()
 	if *flagZbInHass {
 		(&ZigbeeBridge{ports: []int{*flagZbPort}, uart: *flagZbUART, flow: !*flagZbNoFlow, info: *flagZbInfo}).Run()
@@ -148,10 +150,9 @@ func main() {
 }
 
 func deviceInfo() *api.DeviceInfoResponse {
-	host, _ := os.Hostname()
 	info := &api.DeviceInfoResponse{
 		Name:                   srv.name,
-		FriendlyName:           host,
+		FriendlyName:           friendlyName(),
 		MacAddress:             ifaceMAC("eth0"),
 		EsphomeVersion:         esphomeVersion,
 		CompilationTime:        buildTime,
@@ -178,6 +179,9 @@ func handle(c *Conn, m proto.Message) {
 		_ = c.Send(&api.AuthenticationResponse{})
 	case *api.PingRequest:
 		_ = c.Send(&api.PingResponse{})
+	case *api.PingResponse: // our keepalive answered; lastRx is already updated
+	case *api.DisconnectResponse: // the answer to our goodbye
+		c.Close()
 	case *api.DisconnectRequest:
 		_ = c.Send(&api.DisconnectResponse{})
 		c.CloseWhenSent()

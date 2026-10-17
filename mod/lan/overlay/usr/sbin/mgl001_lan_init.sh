@@ -60,6 +60,7 @@ syslogd -s 1024 -b0
 # Puente Zigbee para ZHA: su propio servicio, el primero y aparte del de Home Assistant, para que reiniciar
 # aquel nunca corte el Zigbee. TCP 6638, anunciado por mDNS para que ZHA lo descubra.
 (
+    set -f   # options files are split into words, never expanded as file names / sin comodines
     while :; do
         # shellcheck disable=SC2046
         /usr/bin/mgl001-zigbee $(cat /data/mgl001/zigbee.args 2>/dev/null) 2>&1 | logger -t mgl001-zigbee
@@ -72,6 +73,7 @@ syslogd -s 1024 -b0
 # Hora: NTP que vuelve a arrancar si se para. La ntpd de busybox 1.20 sale si un nombre no resuelve,
 # y pasa si el DNS aún no contesta cuando llega la dirección.
 (
+    set -f   # options files are split into words, never expanded as file names / sin comodines
     while :; do
         ntpd -n -p 0.pool.ntp.org -p 1.pool.ntp.org -p 2.pool.ntp.org -p 3.pool.ntp.org >/dev/null 2>&1
         sleep 30
@@ -89,6 +91,7 @@ syslogd -s 1024 -b0
 # Home Assistant: la pasarela como dispositivo ESPHome nativo, que vuelve a arrancar si se para. Su
 # registro va a syslog (/var/log/messages). Opciones extra, si hacen falta, en /data/mgl001/hass.args.
 (
+    set -f   # options files are split into words, never expanded as file names / sin comodines
     while :; do
         # shellcheck disable=SC2046
         /usr/bin/mgl001-hass $(cat /data/mgl001/hass.args 2>/dev/null) 2>&1 | logger -t mgl001-hass

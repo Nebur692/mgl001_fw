@@ -6,13 +6,15 @@
 # Banco de mgl001-boot: el entorno de U-Boot en un fichero, el fw_update.sh REAL de Xiaomi y dobles de
 # fw_printenv/fw_setenv tan estrictos como los reales.
 BOOT=$1; FWU=$2; ENV0=$3
-ok=0; mal=0; ESPERADAS=47
+ok=0; mal=0; ESPERADAS=56
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 
 mk() { # a root with the initial environment, running bank $1; bank 7/8 contents in $T/r/banks/<n>
     rm -rf "$T/r"; mkdir -p "$T/r/etc" "$T/r/bin" "$T/r/proc" "$T/r/tmp" "$T/r/dev" "$T/r/var/lock"
     cp "$FWU" "$T/r/bin/fw_update.sh"
+    # Whole banks: squashfs and uImage signatures where bank_bootable reads them (rootfs mtdN, kernel mtdN-2)
+    for n in 7 8; do printf hsqs > "$T/r/dev/mtd${n}ro"; printf '\047\005\031\126' > "$T/r/dev/mtd$((n - 2))ro"; done
     cp "$ENV0" "$T/r/env"
     # The environment points to the bank that runs: for 7, root=mtdblock7 and KERNEL read first (as values_for 7)
     [ "$1" = 7 ] && sed -i '/^bootargs=/s#mtdblock8#mtdblock7#; /^bootcmd=/{s/KERNEL_BAK/__B__/g; s/KERNEL /KERNEL_BAK /g; s/__B__/KERNEL/g}' "$T/r/env"
@@ -50,11 +52,13 @@ EOF
 lan_bank() { # bank $1 holds a LAN firmware: its rcS runs mgl001-boot boot
     rm -rf "$T/r/banks/$1"; mkdir -p "$T/r/banks/$1/etc/init.d" "$T/r/banks/$1/usr/sbin"
     printf '#!/bin/sh\n/sbin/mdev -s\n/usr/sbin/mgl001-boot boot\n' > "$T/r/banks/$1/etc/init.d/rcS"
+    mkdir -p "$T/r/banks/$1/bin"; : > "$T/r/banks/$1/bin/busybox"; chmod +x "$T/r/banks/$1/bin/busybox" "$T/r/banks/$1/etc/init.d/rcS"
     cp "$BOOT" "$T/r/banks/$1/usr/sbin/mgl001-boot"; chmod +x "$T/r/banks/$1/usr/sbin/mgl001-boot"
 }
 mod_bank() { # bank $1 holds a stock/mod firmware: no mgl001-boot
     rm -rf "$T/r/banks/$1"; mkdir -p "$T/r/banks/$1/etc/init.d"
     printf '#!/bin/sh\n/sbin/mdev -s\nfw_manager.sh -r\n' > "$T/r/banks/$1/etc/init.d/rcS"
+    mkdir -p "$T/r/banks/$1/bin"; : > "$T/r/banks/$1/bin/busybox"; chmod +x "$T/r/banks/$1/bin/busybox" "$T/r/banks/$1/etc/init.d/rcS"
 }
 v() { grep "^$1=" "$T/r/env" | cut -d= -f2-; }
 writes() { wc -l < "$T/r/writes"; }
@@ -170,6 +174,21 @@ mk 8; printf 'mgl001_keep_bootcmd x\nmgl001_keep_bootargs y\n' | "$T/r/etc/fw_se
 : > "$T/r/writes"; run boot
 chk "old-name leftovers removed" "$(grep -c '^mgl001_' "$T/r/env")" 0
 : > "$T/r/writes"; run boot; chk "then a normal boot writes nothing" "$(writes)" 0
+
+# 12. A bank half erased (interrupted install): back and try refuse it and write nothing
+mk 7; : > "$T/r/dev/mtd8ro"; run back >/dev/null 2>&1; chk "back to an erased rootfs is refused" "$?" 1
+chk "back to an erased rootfs writes nothing" "$(writes)" 0
+mk 7; : > "$T/r/dev/mtd6ro"; run back >/dev/null 2>&1; chk "back to an erased kernel is refused" "$?" 1
+mk 8; : > "$T/r/dev/mtd7ro"; run try >/dev/null 2>&1; chk "try to an erased rootfs is refused" "$?" 1
+chk "try to an erased rootfs writes nothing" "$(writes)" 0
+mk 7; run back >/dev/null; chk "back to a whole bank still works" "$(v bootargs)" "$ARGS8"
+# 13. The environment cannot be read early in rcS: boot gives up loudly, writes nothing
+mk 8; run try >/dev/null; running 7; : > "$T/r/writes"
+mv "$T/r/etc/fw_printenv" "$T/r/etc/fw_printenv.ok"; printf '#!/bin/sh\nexit 1\n' > "$T/r/etc/fw_printenv"; chmod +x "$T/r/etc/fw_printenv"
+run boot; chk "unreadable env: boot fails" "$?" 1
+chk "unreadable env: nothing written" "$(writes)" 0
+mv "$T/r/etc/fw_printenv.ok" "$T/r/etc/fw_printenv"; run boot
+chk "readable again: the trial still goes back" "$(v bootargs)" "$ARGS8"
 
 echo "ok=$ok bad=$mal total=$((ok+mal)) expected=$ESPERADAS"
 [ "$mal" = 0 ] && [ "$((ok+mal))" = "$ESPERADAS" ]

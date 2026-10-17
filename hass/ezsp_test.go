@@ -99,3 +99,20 @@ func TestBluetoothTexts(t *testing.T) {
 		t.Errorf("%q", s)
 	}
 }
+
+// EZSP 7 (EmberZNet 6.6, as Xiaomi's own Zigbee firmware): after the legacy version exchange, frames use the
+// (seq, fc, 0xFF, 0x00, id) header. Made by bellows 1.1.0's ASH encoder: version 7 / stack 6.6.6.0, then
+// getValue VERSION_INFO answered with build 5.
+func TestEZSP7Header(t *testing.T) {
+	host, _ := hex.DecodeString("004221a853dd4f7e104321575480043da47e")
+	chip, _ := hex.DecodeString("0142a1a8532875d4faf67e1243a157548015b55c944c23ac55386ff27e")
+	var last ZigbeeFirmware
+	w := newEZSPWatcher(func(fw ZigbeeFirmware) { last = fw })
+	w.FromHost(host[:9]) // the version request first, then its answer, as on the wire
+	w.FromChip(chip[:11])
+	w.FromHost(host[9:])
+	w.FromChip(chip[11:])
+	if last.Text() != "EmberZNet 6.6.6.0 build 5" || last.ProtocolText() != "EZSP 7" {
+		t.Fatalf("%q %q", last.Text(), last.ProtocolText())
+	}
+}

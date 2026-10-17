@@ -101,14 +101,19 @@ func (a *ashReader) feed(p []byte) {
 }
 
 // ezspFrame splits an EZSP frame: sequence, response or command, frame id and parameters. The first
-// "version" exchange always uses the old 3-byte header; from EZSP 8 on, the header is 5 bytes.
-func ezspFrame(b []byte) (seq byte, response bool, id uint16, params []byte, ok bool) {
+// "version" exchange always uses the old 3-byte header (seq, frame control, id). After it, the header
+// depends on the protocol the chip answered: EZSP 5-7 extend it as (seq, fc, 0xFF, 0x00, id), EZSP 8+
+// use a 2-byte frame control whose format version is 1 and a 2-byte id. proto is 0 while not known.
+func ezspFrame(b []byte, proto int) (seq byte, response bool, id uint16, params []byte, ok bool) {
 	if len(b) < 3 {
 		return
 	}
 	seq, response = b[0], b[1]&0x80 != 0
-	if b[2] == 0x01 && len(b) >= 5 { // frame format version 1 (EZSP 8+)
+	switch {
+	case len(b) >= 5 && (proto >= 8 && b[2]&0x03 == 0x01 || proto == 0 && b[2] == 0x01):
 		return seq, response, binary.LittleEndian.Uint16(b[3:5]), b[5:], true
+	case len(b) >= 5 && proto < 8 && b[2] == 0xFF:
+		return seq, response, uint16(b[4]), b[5:], true
 	}
 	return seq, response, uint16(b[2]), b[3:], true
 }
@@ -177,7 +182,7 @@ func (w *ezspWatcher) safely(f func()) {
 }
 
 func (w *ezspWatcher) command(b []byte) {
-	seq, resp, id, params, ok := ezspFrame(b)
+	seq, resp, id, params, ok := ezspFrame(b, w.fw.Protocol)
 	if ok && !resp && id == ezspGetValue && len(params) >= 1 && params[0] == ezspValueInfo {
 		if len(w.infoSeqs) > 16 {
 			w.infoSeqs = map[byte]bool{}
@@ -187,7 +192,7 @@ func (w *ezspWatcher) command(b []byte) {
 }
 
 func (w *ezspWatcher) response(b []byte) {
-	seq, resp, id, p, ok := ezspFrame(b)
+	seq, resp, id, p, ok := ezspFrame(b, w.fw.Protocol)
 	if !ok || !resp {
 		return
 	}

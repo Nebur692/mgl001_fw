@@ -43,6 +43,15 @@ esac
 say() { echo "$*"; }
 die() { echo "! $*"; rm -rf "$WORK"; exit 1; }
 
+# One installer at a time: two would erase and write the same free bank. Held until exit or reboot;
+# mgl001-hass reads it too. / Un instalador a la vez: dos borrarían y escribirían el mismo banco libre.
+exec 8>"$R/tmp/mgl001_update.lock"
+flock -n 8 || { echo "! Another update is already running, nothing was changed"; exit 1; }
+
+# A stalled download must not hang the installer (nothing is written before the downloads end).
+# busybox 1.20 (the gateway) wants timeout -t SECS / la busybox 1.20 quiere timeout -t
+if timeout -t 1 true 2>/dev/null; then TMO="timeout -t 300"; else TMO="timeout 300"; fi
+
 # CA bundle: the mod ships /etc/ssl/cert.pem, the stock firmware /etc/ca-certificates.crt
 CA=
 for c in "$R/etc/ssl/cert.pem" "$R/etc/ca-certificates.crt"; do [ -s "$c" ] && { CA=$c; break; }; done
@@ -52,7 +61,7 @@ for c in "$R/etc/ssl/cert.pem" "$R/etc/ca-certificates.crt"; do [ -s "$c" ] && {
 fetch() { # path-in-repo output
     if [ -n "$LOCAL" ]; then cp "$LOCAL/${1#firmware/}" "$2" 2>/dev/null; return; fi
     printf 'GET /%s/%s/%s HTTP/1.0\r\nHost: %s\r\nUser-Agent: mgl001_update\r\n\r\n' "$REPO" "$BRANCH" "$1" "$HOST" |
-        openssl s_client -quiet -connect "$HOST:443" -servername "$HOST" \
+        $TMO openssl s_client -quiet -connect "$HOST:443" -servername "$HOST" \
             -CAfile "$CA" -verify_return_error -verify_hostname "$HOST" 2>/dev/null | {
             IFS= read -r status
             case "$status" in *" 200 "*) ;; *) exit 1;; esac
@@ -103,8 +112,10 @@ make_writer() {
     [ "$("$FWP" 2>/dev/null | grep -c bootcmd)" = 1 ] || return 1
     [ "$(grep -cxF '        set_kernel_partitions "$KERNEL_PARTITION"' "$FW_UPDATE")" = 1 ] &&
         [ "$(grep -cxF '        set_rootfs_partitions "$ROOTFS_PARTITION"' "$FW_UPDATE")" = 1 ] || return 1
-    grep -vxF -e '        set_kernel_partitions "$KERNEL_PARTITION"' -e '        set_rootfs_partitions "$ROOTFS_PARTITION"' "$FW_UPDATE" > "$W"
-    ! grep -q -e 'set_kernel_partitions "' -e 'set_rootfs_partitions "' "$W" && sh -n "$W"
+    # check_env too: on a bad CRC it rewrites the boot with three separate writes, in the middle of the install
+    grep -vxF -e '        set_kernel_partitions "$KERNEL_PARTITION"' -e '        set_rootfs_partitions "$ROOTFS_PARTITION"' \
+        -e 'check_env' "$FW_UPDATE" > "$W"
+    ! grep -q -e 'set_kernel_partitions "' -e 'set_rootfs_partitions "' "$W" && ! grep -qx 'check_env' "$W" && sh -n "$W"
 }
 
 # The other bank must hold a valid image before booting into it

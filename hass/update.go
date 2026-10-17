@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"google.golang.org/protobuf/proto"
 
 	"mgl001hass/api"
@@ -36,6 +37,7 @@ const (
 	bootTool      = "/usr/sbin/mgl001-boot"
 	autoKeepPath  = "/data/mgl001/autokeep" // the firmware name a Home Assistant update is waiting to keep
 	checkEvery    = 6 * time.Hour
+	checkRetry    = 10 * time.Minute
 	keepDeadline  = 10 * time.Minute
 )
 
@@ -142,8 +144,8 @@ func (u *Updater) State() *api.UpdateStateResponse {
 	if v := lanVersion(u.latest); v != "" && lanVersion(u.current) != "" && versionNewer(v, cur) {
 		latest = v
 	}
-	// Home Assistant keeps only 255 characters: the problem, if any, goes first
-	// Home Assistant solo guarda 255 caracteres: el problema, si lo hay, va primero
+	// The problem, if any, goes first (the update card shows the start of the notes)
+	// El problema, si lo hay, va primero (la tarjeta de actualización enseña el principio de las notas)
 	notes := ""
 	if u.note != "" {
 		notes = u.note + "\n\n"
@@ -195,12 +197,17 @@ func (u *Updater) Run() {
 		case <-t.C:
 		case <-u.checkNow:
 		}
-		u.check()
-		t.Reset(checkEvery)
+		// After a failure (no DNS or no time yet, GitHub down) try again in 10 minutes, not 6 hours
+		// Tras un fallo (sin DNS o sin hora aún, GitHub caído) se reintenta en 10 minutos, no en 6 horas
+		if u.check() {
+			t.Reset(checkEvery)
+		} else {
+			t.Reset(checkRetry)
+		}
 	}
 }
 
-func (u *Updater) check() {
+func (u *Updater) check() bool {
 	list, err := fetch(listURL)
 	u.mu.Lock()
 	if err != nil {
@@ -213,6 +220,7 @@ func (u *Updater) check() {
 		log.Printf("update: %v", err)
 	}
 	u.publish()
+	return err == nil
 }
 
 func fetch(url string) (string, error) {
@@ -246,6 +254,16 @@ func (u *Updater) install(name string) {
 		u.inProgress, u.progress, u.note = false, 0, "Last update failed: "+msg+". The running firmware was kept."
 		u.mu.Unlock()
 		u.publish()
+	}
+	// Another install still running (started before this program restarted): leave it and its file alone
+	// Otra instalación aún en marcha (empezada antes de reiniciarse este programa): no se toca, ni su fichero
+	if installerRunning() {
+		log.Printf("update: another update is already running")
+		u.mu.Lock()
+		u.inProgress, u.progress, u.note = false, 0, "Another update is already running."
+		u.mu.Unlock()
+		u.publish()
+		return
 	}
 	// Written before the trial boot: the new firmware reads it to keep itself once healthy
 	if err := os.WriteFile(autoKeepPath, []byte(name+"\n"), 0600); err != nil {
@@ -297,6 +315,11 @@ func (u *Updater) settleTrial() {
 		return
 	}
 	want := strings.TrimSpace(string(b))
+	// The installer still writing (this program restarted mid-install): its trial boot needs the file
+	// El instalador sigue escribiendo (este programa se reinició a mitad): su arranque de prueba necesita el fichero
+	if installerRunning() {
+		return
+	}
 	// "name=value" while a trial waits to be kept; an error when the variable does not exist
 	if keep, err := exec.Command("/etc/fw_printenv", "mgl001_kcmd").Output(); err != nil || !strings.Contains(string(keep), "=") {
 		_ = os.Remove(autoKeepPath) // no trial pending (already kept, or gone back)
@@ -308,9 +331,11 @@ func (u *Updater) settleTrial() {
 		return
 	}
 	log.Printf("update: trial boot of %s; keeping it once Zigbee and Home Assistant are connected", u.current)
-	deadline := time.Now().Add(keepDeadline)
+	// From the gateway's boot, not this program's start: a crash loop must not keep postponing it
+	// Desde el arranque de la pasarela, no de este programa: un bucle de caídas no debe aplazarlo
+	deadline := time.Now().Add(keepDeadline - uptime())
 	for time.Now().Before(deadline) {
-		if zigbeeConnected() && haConnected() {
+		if zigbeeConnected() && zigbeeAnswered() && haConnected() {
 			out, err := exec.Command(bootTool, "keep").CombinedOutput()
 			log.Printf("update: %s", strings.TrimSpace(string(out)))
 			if err == nil {
@@ -322,8 +347,7 @@ func (u *Updater) settleTrial() {
 	}
 	log.Printf("update: Zigbee or Home Assistant did not come back in %s; rebooting to the previous firmware", keepDeadline)
 	_ = os.Remove(autoKeepPath)
-	_ = exec.Command("sync").Run()
-	_ = exec.Command("reboot").Run()
+	rebootGateway()
 }
 
 // haConnected: Home Assistant (or any API client) is subscribed to states.
@@ -335,4 +359,37 @@ func haConnected() bool {
 		}
 	})
 	return found
+}
+
+var installLock = "/tmp/mgl001_update.lock" // held by mgl001_update.sh while it runs (a var for tests)
+
+// installerRunning: mgl001_update.sh holds its lock (flock) from start to reboot.
+func installerRunning() bool {
+	f, err := os.Open(installLock)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_SH|unix.LOCK_NB); err != nil {
+		return true
+	}
+	_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
+	return false
+}
+
+// zigbeeAnswered: the Zigbee chip answered ZHA in this boot (the bridge left its firmware in RAM), which
+// says more than a connected socket.
+func zigbeeAnswered() bool {
+	_, err := os.Stat(*flagZbInfo)
+	return err == nil
+}
+
+// uptime since the gateway booted.
+func uptime() time.Duration {
+	b, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		return 0
+	}
+	s, _ := strconv.ParseFloat(strings.Fields(string(b) + " 0")[0], 64)
+	return time.Duration(s * float64(time.Second))
 }
