@@ -78,7 +78,7 @@ command_line:
 
 #### LAN variant: a native Home Assistant device
 
-The firmwares named `mgl001_<version>_lan<date>` remove every Xiaomi service: cloud, Mi Home, Matter, Xiaomi Bluetooth and Wi‑Fi. The gateway becomes a Home Assistant device (ESPHome API) and a network Zigbee coordinator for ZHA, both found by Home Assistant by itself. It keeps wired Ethernet with DHCP (same host name and MAC address as the stock firmware), NTP time in the time zone Mi Home saved, telnet and SSH, and the hardware watchdog.
+**BurbuHub** — the firmwares named `mgl001_<version>_lan<date>` (shown in Home Assistant as **BurbuHub** and the date of the version, e.g. `BurbuHub 2026.10.17.5`) remove every Xiaomi service: cloud, Mi Home, Matter, Xiaomi Bluetooth and Wi‑Fi. The gateway becomes a Home Assistant device (ESPHome API) and a network Zigbee coordinator for ZHA, both found by Home Assistant by itself. It keeps wired Ethernet with DHCP (same host name and MAC address as the stock firmware), NTP time in the time zone Mi Home saved, telnet and SSH, and the hardware watchdog.
 
 **Before you start**
 
@@ -212,7 +212,7 @@ command_line:
 
 #### Variante LAN: un dispositivo nativo de Home Assistant
 
-Los firmwares llamados `mgl001_<versión>_lan<fecha>` quitan todos los servicios de Xiaomi: nube, Mi Home, Matter, Bluetooth de Xiaomi y wifi. La pasarela pasa a ser un dispositivo de Home Assistant (API de ESPHome) y un coordinador Zigbee en red para ZHA, y Home Assistant encuentra los dos solo. Conserva la red por cable con DHCP (el mismo nombre y la misma dirección MAC que el firmware original), la hora por NTP en la zona horaria que guardó Mi Home, telnet y SSH, y el vigilante de hardware.
+**BurbuHub** — los firmwares llamados `mgl001_<versión>_lan<fecha>` (en Home Assistant se ven como **BurbuHub** y la fecha de la versión, p. ej. `BurbuHub 2026.10.17.5`) quitan todos los servicios de Xiaomi: nube, Mi Home, Matter, Bluetooth de Xiaomi y wifi. La pasarela pasa a ser un dispositivo de Home Assistant (API de ESPHome) y un coordinador Zigbee en red para ZHA, y Home Assistant encuentra los dos solo. Conserva la red por cable con DHCP (el mismo nombre y la misma dirección MAC que el firmware original), la hora por NTP en la zona horaria que guardó Mi Home, telnet y SSH, y el vigilante de hardware.
 
 **Antes de empezar**
 

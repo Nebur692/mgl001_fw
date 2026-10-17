@@ -118,7 +118,7 @@ func (g *Gateway) States() []proto.Message {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	l := []proto.Message{g.ledStateMsg(), &api.BinarySensorStateResponse{Key: keyZigbee, State: g.zigbee},
-		&api.TextSensorStateResponse{Key: keyFirmware, State: firmwareName()},
+		&api.TextSensorStateResponse{Key: keyFirmware, State: displayName(firmwareName())},
 		&api.TextSensorStateResponse{Key: keyBank, State: bankName()},
 		&api.BinarySensorStateResponse{Key: keyEthLink, State: g.eth}}
 	for k, v := range g.sensors {

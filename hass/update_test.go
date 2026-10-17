@@ -69,3 +69,17 @@ func TestStateNeverOffersOlder(t *testing.T) {
 		}
 	}
 }
+
+// What a person reads: our own name for a LAN build; stock and mod firmwares are shown as they are.
+func TestDisplayName(t *testing.T) {
+	for name, want := range map[string]string{
+		"mgl001_1.0.8_0013_lan20261017.5": "BurbuHub 2026.10.17.5",
+		"mgl001_1.0.9_0002_lan20270105":   "BurbuHub 2027.1.5",
+		"mgl001_1.0.8_0013_mod20261016.2": "mgl001_1.0.8_0013_mod20261016.2",
+		"stock":                           "stock",
+	} {
+		if got := displayName(name); got != want {
+			t.Errorf("displayName(%q) = %q, want %q", name, got, want)
+		}
+	}
+}

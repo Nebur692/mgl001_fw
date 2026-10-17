@@ -34,25 +34,25 @@ func announce(name, mac string, port, zigbeePort int) {
 	host, _ := os.Hostname()
 	plainMAC := strings.ToLower(strings.ReplaceAll(mac, ":", ""))
 	go announceService(name, name, "_esphomelib._tcp", port, []string{
-		"friendly_name=Xiaomi Hub 2 (" + host + ")",
+		"friendly_name=" + productName + " (" + host + ")",
 		"version=" + esphomeVersion,
 		"mac=" + plainMAC,
 		"platform=Linux",
 		"board=mgl001",
 		"network=ethernet",
 		"api_encryption=Noise_NNpsk0_25519_ChaChaPoly_SHA256",
-		"project_name=nebur692.mgl001_fw",
-		"project_version=" + version,
+		"project_name=Burbujalandia." + productName,
+		"project_version=" + runningVersion(),
 	})
 	if zigbeePort != 0 {
 		// What ZHA reads from _zigbee-coordinator._tcp: radio_type and a stable serial_number (its unique id)
 		// Lo que ZHA lee de _zigbee-coordinator._tcp: radio_type y un serial_number estable (su id único)
-		go announceService("Xiaomi Hub 2 Zigbee ("+host+")", name, "_zigbee-coordinator._tcp", zigbeePort, []string{
+		go announceService(productName+" Zigbee ("+host+")", name, "_zigbee-coordinator._tcp", zigbeePort, []string{
 			"radio_type=ezsp",
 			"serial_number=mgl001-" + plainMAC,
-			"name=Xiaomi Hub 2 Zigbee (" + host + ")",
-			"manufacturer=Xiaomi",
-			"model=Smart Home Hub 2 (mgl001)",
+			"name=" + productName + " Zigbee (" + host + ")",
+			"manufacturer=Burbujalandia",
+			"model=" + productName + " (Xiaomi Hub 2 mgl001)",
 		})
 	}
 }

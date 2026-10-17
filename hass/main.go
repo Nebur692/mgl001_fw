@@ -166,14 +166,14 @@ func deviceInfo() *api.DeviceInfoResponse {
 	host, _ := os.Hostname()
 	info := &api.DeviceInfoResponse{
 		Name:                   srv.name,
-		FriendlyName:           "Xiaomi Hub 2 (" + host + ")",
+		FriendlyName:           productName + " (" + host + ")",
 		MacAddress:             ifaceMAC("eth0"),
 		EsphomeVersion:         esphomeVersion,
 		CompilationTime:        buildTime,
-		Model:                  "Smart Home Hub 2 (mgl001) - mgl001_fw",
-		Manufacturer:           "Xiaomi",
-		ProjectName:            "nebur692.mgl001_fw",
-		ProjectVersion:         version,
+		Model:                  productName + " (Xiaomi Hub 2 mgl001)",
+		Manufacturer:           "Burbujalandia",
+		ProjectName:            "Burbujalandia." + productName,
+		ProjectVersion:         runningVersion(),
 		ApiEncryptionSupported: true,
 	}
 	if bt != nil {
@@ -188,7 +188,7 @@ var buildTime = time.Now().Format("Jan 02 2006, 15:04:05")
 func handle(c *Conn, m proto.Message) {
 	switch r := m.(type) {
 	case *api.HelloRequest:
-		_ = c.Send(&api.HelloResponse{ApiVersionMajor: apiMajor, ApiVersionMinor: apiMinor, ServerInfo: "mgl001_fw " + version, Name: srv.name})
+		_ = c.Send(&api.HelloResponse{ApiVersionMajor: apiMajor, ApiVersionMinor: apiMinor, ServerInfo: productName + " " + runningVersion(), Name: srv.name})
 	case *api.AuthenticationRequest: // old clients; there is no password
 		_ = c.Send(&api.AuthenticationResponse{})
 	case *api.PingRequest:

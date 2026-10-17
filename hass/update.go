@@ -57,6 +57,28 @@ func lanVersion(name string) string {
 	return v
 }
 
+// The firmware's own name, the one a person reads. The build names (mgl001_<Xiaomi base>_lan<date>) stay
+// as the technical id: the installer of every gateway already out there reads its base version from them.
+// El nombre propio del firmware, el que lee una persona. Los nombres de compilación siguen como id técnico:
+// el instalador de cada pasarela ya instalada lee de ellos su versión base.
+const productName = "BurbuHub"
+
+// displayName is how a firmware is shown: "BurbuHub 2026.10.17.5" for a LAN build, any other as it is.
+func displayName(name string) string {
+	if v := lanVersion(name); v != "" {
+		return productName + " " + v
+	}
+	return name
+}
+
+// runningVersion is the running LAN build's version, or this program's when it runs on something else.
+func runningVersion() string {
+	if v := lanVersion(firmwareName()); v != "" {
+		return v
+	}
+	return version
+}
+
 // versionNewer: a > b, comparing the dot-separated numbers.
 func versionNewer(a, b string) bool {
 	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
@@ -126,11 +148,11 @@ func (u *Updater) State() *api.UpdateStateResponse {
 	if u.note != "" {
 		notes = u.note + "\n\n"
 	}
-	notes += "mgl001_fw LAN: ZHA bridge and native Home Assistant entities, no Xiaomi services."
+	notes += productName + ": ZHA bridge and native Home Assistant entities, no Xiaomi services."
 	if u.latest != "" {
-		notes += " Newest: " + u.latest
+		notes += " Newest: " + displayName(u.latest)
 	}
-	return &api.UpdateStateResponse{Key: keyUpdate, CurrentVersion: cur, LatestVersion: latest, Title: "mgl001_fw LAN",
+	return &api.UpdateStateResponse{Key: keyUpdate, CurrentVersion: cur, LatestVersion: latest, Title: productName,
 		ReleaseSummary: notes, ReleaseUrl: repoURL, InProgress: u.inProgress, HasProgress: u.inProgress, Progress: u.progress}
 }
 
