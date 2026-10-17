@@ -44,6 +44,7 @@ var (
 	flagTZLink   = flag.String("tz-link", "/tmp/localtime", "the link /etc/localtime points to")
 	flagZbUART   = flag.String("zigbee-uart", "/dev/ttyS1", "Zigbee coordinator UART")
 	flagZbNoFlow = flag.Bool("zigbee-no-flow", false, "no RTS/CTS on the Zigbee UART (tests on a pseudo-terminal)")
+	flagZbInfo   = flag.String("zigbee-info", "/tmp/mgl001-zigbee-info", "where the bridge leaves the Zigbee chip's firmware for mgl001-hass (RAM)")
 	flagBtInfo   = flag.Bool("btinfo", false, "read the Bluetooth controller version and exit (read-only)")
 	flagBtDFU    = flag.String("btdfu", "", "flash this sealed Telink image to the Bluetooth controller and exit")
 	flagBtVer    = flag.Uint("btdfu-version", 3, "firmware version announced to the controller DFU")
@@ -118,7 +119,7 @@ func main() {
 				time.Sleep(time.Hour)
 			}
 		}
-		(&ZigbeeBridge{ports: []int{*flagZbPort}, uart: *flagZbUART, flow: !*flagZbNoFlow}).Run()
+		(&ZigbeeBridge{ports: []int{*flagZbPort}, uart: *flagZbUART, flow: !*flagZbNoFlow, info: *flagZbInfo}).Run()
 		select {}
 	}
 	loadMessageIDs()
@@ -149,7 +150,7 @@ func main() {
 	}
 	go gw.Run()
 	if *flagZbInHass {
-		(&ZigbeeBridge{ports: []int{*flagZbPort}, uart: *flagZbUART, flow: !*flagZbNoFlow}).Run()
+		(&ZigbeeBridge{ports: []int{*flagZbPort}, uart: *flagZbUART, flow: !*flagZbNoFlow, info: *flagZbInfo}).Run()
 	}
 	go upd.Run()
 	if bt != nil {

@@ -64,7 +64,10 @@ type Gateway struct {
 
 func NewGateway() *Gateway {
 	g := &Gateway{led: ledValue{Brightness: 1, R: 1, G: 1, B: 1}, sensors: map[uint32]float32{},
-		texts: map[uint32]string{keyReboot: rebootReason()}}
+		texts: map[uint32]string{keyReboot: rebootReason(), keyZbFirmware: "", keyZbProtocol: "", keyBTFirmware: "", keyBTVersion: ""}}
+	if *flagNoBT {
+		g.texts[keyBTFirmware], g.texts[keyBTVersion] = "Off", "Off"
+	}
 	if b, err := os.ReadFile(ledState); err == nil {
 		_ = json.Unmarshal(b, &g.led)
 		g.saved = b
@@ -101,6 +104,10 @@ func (g *Gateway) List() []proto.Message {
 			DeviceClass: "data_rate", StateClass: api.SensorStateClass_STATE_CLASS_MEASUREMENT, EntityCategory: diag()},
 		&api.ListEntitiesTextSensorResponse{ObjectId: "ip_address", Key: keyIP, Name: "IP address", Icon: "mdi:ip-network", EntityCategory: diag()},
 		&api.ListEntitiesTextSensorResponse{ObjectId: "time_zone", Key: keyTimeZone, Name: "Time zone", Icon: "mdi:map-clock", EntityCategory: diag()},
+		&api.ListEntitiesTextSensorResponse{ObjectId: "zigbee_firmware", Key: keyZbFirmware, Name: "Zigbee firmware", Icon: "mdi:zigbee", EntityCategory: diag()},
+		&api.ListEntitiesTextSensorResponse{ObjectId: "zigbee_protocol", Key: keyZbProtocol, Name: "Zigbee protocol", Icon: "mdi:zigbee", EntityCategory: diag()},
+		&api.ListEntitiesTextSensorResponse{ObjectId: "bluetooth_firmware", Key: keyBTFirmware, Name: "Bluetooth firmware", Icon: "mdi:bluetooth-settings", EntityCategory: diag()},
+		&api.ListEntitiesTextSensorResponse{ObjectId: "bluetooth_version", Key: keyBTVersion, Name: "Bluetooth version", Icon: "mdi:bluetooth", EntityCategory: diag()},
 	}
 	if bt != nil {
 		l = append(l, &api.ListEntitiesSensorResponse{ObjectId: "ble_adverts", Key: keyBTAdverts, Name: "Bluetooth advertisements",
@@ -408,6 +415,10 @@ func (g *Gateway) saveLED() {
 // checkLinks sends the Zigbee bridge and Ethernet states when they change (or always, on the first pass).
 func (g *Gateway) checkLinks(force bool) {
 	z, e := zigbeeConnected(), ethLink()
+	if fw, proto := loadZigbeeFirmware(*flagZbInfo); fw != "" || proto != "" {
+		g.SetText(keyZbFirmware, fw)
+		g.SetText(keyZbProtocol, proto)
+	}
 	g.mu.Lock()
 	zc, ec := force || z != g.zigbee, force || e != g.eth
 	g.zigbee, g.eth = z, e

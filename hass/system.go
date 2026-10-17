@@ -5,6 +5,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -12,12 +13,16 @@ import (
 
 // New keys after the first twelve, so the old ones never move / Claves nuevas tras las doce primeras
 const (
-	keyCPUTemp  = 13
-	keyReboot   = 14
-	keyEthLink  = 15
-	keyEthSpeed = 16
-	keyIP       = 17
-	keyTimeZone = 18
+	keyCPUTemp    = 13
+	keyReboot     = 14
+	keyEthLink    = 15
+	keyEthSpeed   = 16
+	keyIP         = 17
+	keyTimeZone   = 18
+	keyZbFirmware = 19
+	keyZbProtocol = 20
+	keyBTFirmware = 21
+	keyBTVersion  = 22
 )
 
 var sysRoot = "" // only for tests / solo para pruebas
@@ -85,4 +90,23 @@ func ipAddress() string {
 		return ips[0]
 	}
 	return ""
+}
+
+// btFirmwareText: who made the Bluetooth controller and its firmware revision (the version our DFU writes).
+// Quién fabricó el controlador Bluetooth y la revisión de su firmware (la versión que graba nuestro DFU).
+func btFirmwareText(manufacturer, revision uint16) string {
+	name := map[uint16]string{0x0211: "Telink"}[manufacturer]
+	if name == "" {
+		name = fmt.Sprintf("manufacturer %#04x", manufacturer)
+	}
+	return fmt.Sprintf("%s, revision %#04x", name, revision)
+}
+
+// btVersionText: the Bluetooth Core version the controller speaks, from its HCI version number.
+func btVersionText(hci uint8) string {
+	core := map[uint8]string{6: "4.0", 7: "4.1", 8: "4.2", 9: "5.0", 10: "5.1", 11: "5.2", 12: "5.3", 13: "5.4", 14: "6.0"}[hci]
+	if core == "" {
+		return fmt.Sprintf("HCI %d", hci)
+	}
+	return fmt.Sprintf("Bluetooth %s (HCI %d)", core, hci)
 }

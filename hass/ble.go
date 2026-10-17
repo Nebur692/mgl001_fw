@@ -744,6 +744,10 @@ func logController(h *hci.HCI) {
 	var v cmd.ReadLocalVersionInformationRP
 	if err := h.Send(&cmd.ReadLocalVersionInformation{}, &v); err == nil {
 		log.Printf("bt: HCI %d.%04x LMP %d.%04x manufacturer %#04x", v.HCIVersion, v.HCIRevision, v.LMPPAMVersion, v.LMPPAMSubversion, v.ManufacturerName)
+		if gw != nil {
+			gw.SetText(keyBTFirmware, btFirmwareText(v.ManufacturerName, v.HCIRevision))
+			gw.SetText(keyBTVersion, btVersionText(v.HCIVersion))
+		}
 	}
 	var s cmd.LEReadSupportedStatesRP
 	if err := h.Send(&cmd.LEReadSupportedStates{}, &s); err == nil {

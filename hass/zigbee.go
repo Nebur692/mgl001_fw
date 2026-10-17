@@ -53,6 +53,7 @@ type ZigbeeBridge struct {
 	ports []int // the port announced to ZHA (6638) / el puerto anunciado a ZHA
 	uart  string
 	flow  bool
+	info  string // the chip's firmware, for mgl001-hass / el firmware del chip, para mgl001-hass
 
 	mu  sync.Mutex
 	cur net.Conn // the client being served, on any port / el cliente atendido, en cualquier puerto
@@ -125,10 +126,13 @@ func (z *ZigbeeBridge) serve(c net.Conn) {
 	}
 	defer f.Close()
 	log.Printf("zigbee: %s connected", c.RemoteAddr())
+	// The chip's firmware, read from what ZHA asks it (a copy, after passing it on)
+	// El firmware del chip, leído de lo que le pregunta ZHA (una copia, después de pasarlo)
+	w := newEZSPWatcher(z.firmwareSeen)
 	done := make(chan struct{}, 2)
 	// Plain copies (no splice/sendfile shortcuts between a socket and a tty)
-	go func() { _, _ = io.Copy(struct{ io.Writer }{f}, struct{ io.Reader }{c}); done <- struct{}{} }() // ZHA -> chip
-	go func() { _, _ = io.Copy(struct{ io.Writer }{c}, struct{ io.Reader }{f}); done <- struct{}{} }() // chip -> ZHA
+	go func() { _, _ = io.Copy(watchWriter{f, w.FromHost}, struct{ io.Reader }{c}); done <- struct{}{} }() // ZHA -> chip
+	go func() { _, _ = io.Copy(watchWriter{c, w.FromChip}, struct{ io.Reader }{f}); done <- struct{}{} }() // chip -> ZHA
 	<-done
 	// Whichever side ended, close both so the other copy returns too
 	// Acabe el lado que acabe, se cierran los dos para que la otra copia también vuelva
@@ -136,4 +140,34 @@ func (z *ZigbeeBridge) serve(c net.Conn) {
 	_ = f.Close()
 	<-done
 	log.Printf("zigbee: %s disconnected", c.RemoteAddr())
+}
+
+// watchWriter writes, then hands a copy of what was written to the watcher. As a plain Writer it also
+// keeps io.Copy away from splice/sendfile shortcuts between a socket and a tty.
+// Escribe y después da una copia de lo escrito al vigilante.
+type watchWriter struct {
+	w     io.Writer
+	watch func([]byte)
+}
+
+func (x watchWriter) Write(p []byte) (int, error) {
+	n, err := x.w.Write(p)
+	if n > 0 {
+		x.watch(p[:n])
+	}
+	return n, err
+}
+
+func (z *ZigbeeBridge) firmwareSeen(fw ZigbeeFirmware) {
+	if z.info == "" || fw.Text() == "" && fw.ProtocolText() == "" {
+		return
+	}
+	if f, p := loadZigbeeFirmware(z.info); f == fw.Text() && p == fw.ProtocolText() {
+		return
+	}
+	if err := saveZigbeeFirmware(z.info, fw); err != nil {
+		log.Printf("zigbee: %v", err)
+		return
+	}
+	log.Printf("zigbee: chip firmware %q, %q", fw.Text(), fw.ProtocolText())
 }

@@ -112,7 +112,7 @@ command_line:
 
 Each service restarts by itself if it stops, and they are independent: restarting the Home Assistant device never cuts Zigbee. Their options go in `/data/mgl001/zigbee.args` and `/data/mgl001/hass.args`.
 
-**Entities in Home Assistant**: RGB LED, the button (press, double press, long press), Zigbee bridge connected, Ethernet connected and its speed, IP address, CPU temperature, last reboot (power on, software or watchdog), time zone, uptime, free memory, load, free storage, firmware, firmware bank, restart button and firmware update. Without Mi Home, recovery level 2 below does not apply; telnet and SSH stay open as on the modified firmware.
+**Entities in Home Assistant**: RGB LED, the button (press, double press, long press), Zigbee bridge connected, Ethernet connected and its speed, IP address, CPU temperature, last reboot (power on, software or watchdog), time zone, Zigbee firmware and protocol (as the chip tells ZHA), Bluetooth firmware and version, uptime, free memory, load, free storage, firmware, firmware bank, restart button and firmware update. Without Mi Home, recovery level 2 below does not apply; telnet and SSH stay open as on the modified firmware.
 
 **Time zone**: the gateway takes Home Assistant's own (**Settings → System → General**) every time Home Assistant connects, keeps it for the next boots and follows it if you change it there. Until Home Assistant has connected once it uses the one Mi Home saved, or UTC.
 
@@ -246,7 +246,7 @@ command_line:
 
 Cada servicio vuelve a arrancar solo si se para, y son independientes: reiniciar el dispositivo de Home Assistant nunca corta el Zigbee. Sus opciones van en `/data/mgl001/zigbee.args` y `/data/mgl001/hass.args`.
 
-**Entidades en Home Assistant**: LED RGB, el botón (pulsación, doble pulsación y pulsación larga), puente Zigbee conectado, red por cable conectada y su velocidad, dirección IP, temperatura del procesador, último reinicio (encendido, software o vigilante), zona horaria, tiempo encendida, memoria libre, carga, almacenamiento libre, firmware, banco de firmware, botón de reinicio y actualización de firmware. Sin Mi Home, el nivel 2 de recuperación de abajo no aplica; telnet y SSH siguen abiertos como en el firmware modificado.
+**Entidades en Home Assistant**: LED RGB, el botón (pulsación, doble pulsación y pulsación larga), puente Zigbee conectado, red por cable conectada y su velocidad, dirección IP, temperatura del procesador, último reinicio (encendido, software o vigilante), zona horaria, firmware y protocolo del Zigbee (lo que el chip le dice a ZHA), firmware y versión del Bluetooth, tiempo encendida, memoria libre, carga, almacenamiento libre, firmware, banco de firmware, botón de reinicio y actualización de firmware. Sin Mi Home, el nivel 2 de recuperación de abajo no aplica; telnet y SSH siguen abiertos como en el firmware modificado.
 
 **Zona horaria**: la pasarela toma la de Home Assistant (**Ajustes → Sistema → General**) cada vez que Home Assistant conecta, la guarda para los siguientes arranques y la sigue si la cambias allí. Hasta que Home Assistant conecta por primera vez usa la que guardó Mi Home, o UTC.
 
