@@ -112,6 +112,18 @@ command_line:
 
 Each service restarts by itself if it stops, and they are independent: restarting the Home Assistant device never cuts Zigbee. Their options go in `/data/mgl001/zigbee.args` and `/data/mgl001/hass.args`.
 
+**Bluetooth chip tools** (diagnosis). They need the chip's serial port free: `echo -no-bt > /data/mgl001/hass.args` and `reboot` first (afterwards, `rm /data/mgl001/hass.args` and `reboot`).
+
+| Command | What it does |
+|---|---|
+| `mgl001-hass -btinfo` | Reads the chip's firmware version (read-only) |
+| `mgl001-hass -bthci 1001:` | Sends one HCI command, `<opcode>:<parameters>` in hex, and shows the answer |
+| `mgl001-hass -btrescue-info` | Opens the chip's rescue window: running bank, flash id and boot marks (read-only) |
+| `mgl001-hass -btrescue-read /tmp/bt-flash.bin` | Saves a copy of the chip's whole flash (512 KB) |
+| `mgl001-hass -btrescue-write <image>` | Writes a sealed image into the bank that is not running and boots it, without HCI |
+
+The rescue window is part of a chip firmware that carries it: for 300 ms after reset the chip listens on its serial port and opens a small flash session that does not need HCI, so a chip image that boots but no longer answers can still be rewritten. **Xiaomi's chip firmware does not have it**, and this repository does not publish a chip firmware that does, so on a stock chip the `-btrescue` commands only answer that there is no window.
+
 **Entities in Home Assistant**: RGB LED, the button (press, double press, long press), Zigbee bridge connected, Ethernet connected and its speed, IP address, CPU temperature, last reboot (power on, software or watchdog), time zone, Zigbee firmware and protocol (as the chip tells ZHA), Bluetooth firmware and version, host name (editable), uptime, free memory, load, free storage, firmware, firmware bank, restart button and firmware update. Without Mi Home, recovery level 2 below does not apply; telnet and SSH stay open as on the modified firmware.
 
 **Time zone**: the gateway takes Home Assistant's own (**Settings → System → General**) every time Home Assistant connects, keeps it for the next boots and follows it if you change it there. Until Home Assistant has connected once it uses the one Mi Home saved, or UTC.
@@ -247,6 +259,18 @@ command_line:
 | `cat /var/log/messages` | Registro del sistema y de sus dos servicios: `mgl001-zigbee` (el puente Zigbee) y `mgl001-hass` (el dispositivo de Home Assistant) |
 
 Cada servicio vuelve a arrancar solo si se para, y son independientes: reiniciar el dispositivo de Home Assistant nunca corta el Zigbee. Sus opciones van en `/data/mgl001/zigbee.args` y `/data/mgl001/hass.args`.
+
+**Herramientas del chip Bluetooth** (diagnóstico). Necesitan libre el puerto serie del chip: antes, `echo -no-bt > /data/mgl001/hass.args` y `reboot` (al acabar, `rm /data/mgl001/hass.args` y `reboot`).
+
+| Orden | Qué hace |
+|---|---|
+| `mgl001-hass -btinfo` | Lee la versión del firmware del chip (solo lectura) |
+| `mgl001-hass -bthci 1001:` | Manda un comando HCI, `<opcode>:<parámetros>` en hexadecimal, y muestra la respuesta |
+| `mgl001-hass -btrescue-info` | Abre la ventana de rescate del chip: banco que corre, id de la flash y marcas de arranque (solo lectura) |
+| `mgl001-hass -btrescue-read /tmp/bt-flash.bin` | Guarda una copia de la flash entera del chip (512 KB) |
+| `mgl001-hass -btrescue-write <imagen>` | Escribe una imagen sellada en el banco que no corre y la arranca, sin HCI |
+
+La ventana de rescate es parte de un firmware del chip que la lleve: durante 300 ms tras el reset, el chip escucha en su puerto serie y abre una sesión mínima de flash que no necesita HCI, así que una imagen del chip que arranca pero ya no contesta se puede volver a grabar. **El firmware del chip de Xiaomi no la tiene**, y este repositorio no publica ningún firmware del chip que la lleve: con el chip original, las órdenes `-btrescue` solo contestan que no hay ventana.
 
 **Entidades en Home Assistant**: LED RGB, el botón (pulsación, doble pulsación y pulsación larga), puente Zigbee conectado, red por cable conectada y su velocidad, dirección IP, temperatura del procesador, último reinicio (encendido, software o vigilante), zona horaria, firmware y protocolo del Zigbee (lo que el chip le dice a ZHA), firmware y versión del Bluetooth, nombre de host (editable), tiempo encendida, memoria libre, carga, almacenamiento libre, firmware, banco de firmware, botón de reinicio y actualización de firmware. Sin Mi Home, el nivel 2 de recuperación de abajo no aplica; telnet y SSH siguen abiertos como en el firmware modificado.
 
