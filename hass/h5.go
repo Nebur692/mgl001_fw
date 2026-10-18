@@ -91,16 +91,19 @@ func openUART(path string) (*os.File, error) {
 }
 
 // resetController pulses the Telink reset line (GPIO 60, low = reset), as Xiaomi's radio_silence.sh does.
-func resetController() {
-	gpio := "/sys/class/gpio/gpio60"
-	if _, err := os.Stat(gpio); err != nil {
+func resetController() { pulseReset(500 * time.Millisecond) }
+
+// pulseReset holds the reset line low for 200 ms, then waits settle. -bt-reset-gpio points elsewhere on the bench.
+func pulseReset(settle time.Duration) {
+	gpio := *flagBtReset
+	if _, err := os.Stat(gpio); err != nil && gpio == "/sys/class/gpio/gpio60" {
 		_ = os.WriteFile("/sys/class/gpio/export", []byte("60"), 0200)
 		_ = os.WriteFile(gpio+"/direction", []byte("out"), 0644)
 	}
 	_ = os.WriteFile(gpio+"/value", []byte("0"), 0644)
 	time.Sleep(200 * time.Millisecond)
 	_ = os.WriteFile(gpio+"/value", []byte("1"), 0644)
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(settle)
 }
 
 func NewH5(path string) (*H5, error) {

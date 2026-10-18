@@ -50,6 +50,12 @@ var (
 	flagNodeFile = flag.String("node-name-file", "/data/mgl001/node_name", "the ESPHome device name, fixed the first time")
 	flagBtInfo   = flag.Bool("btinfo", false, "read the Bluetooth controller version and exit (read-only)")
 	flagBtDFU    = flag.String("btdfu", "", "flash this sealed Telink image to the Bluetooth controller and exit")
+	flagBtReset  = flag.String("bt-reset-gpio", "/sys/class/gpio/gpio60", "the Bluetooth controller's reset line (sysfs GPIO directory)")
+	flagBtHCI    = flag.String("bthci", "", "send one HCI command, <opcode hex>:<params hex>, print the answer and exit")
+	flagRscInfo  = flag.Bool("btrescue-info", false, "open the controller's rescue window, print its banks and flash id, and exit (read-only)")
+	flagRscRead  = flag.String("btrescue-read", "", "save the controller's whole flash (512 KB) to this file through the rescue window, and exit")
+	flagRscWrite = flag.String("btrescue-write", "", "write this sealed Telink image to the bank that is not running, through the rescue window, boot it and exit")
+	flagRscCmd   = flag.String("btrescue-cmd", "", "send one raw rescue command, <letter>:<payload hex>, and exit (diagnosis)")
 	flagBtVer    = flag.Uint("btdfu-version", 3, "firmware version announced to the controller DFU")
 )
 
@@ -107,11 +113,22 @@ func main() {
 		select {}
 	}
 	loadMessageIDs()
-	if *flagBtInfo || *flagBtDFU != "" {
+	if *flagBtInfo || *flagBtDFU != "" || *flagBtHCI != "" || *flagRscInfo || *flagRscRead != "" || *flagRscWrite != "" || *flagRscCmd != "" {
 		var err error
-		if *flagBtDFU != "" {
+		switch {
+		case *flagBtDFU != "":
 			err = btDFU(*flagBtDFU, uint16(*flagBtVer))
-		} else {
+		case *flagBtHCI != "":
+			err = btHCI(*flagBtHCI)
+		case *flagRscInfo:
+			err = btRescueInfo()
+		case *flagRscRead != "":
+			err = btRescueRead(*flagRscRead)
+		case *flagRscWrite != "":
+			err = btRescueWrite(*flagRscWrite)
+		case *flagRscCmd != "":
+			err = btRescueCmd(*flagRscCmd)
+		default:
 			err = btInfo()
 		}
 		if err != nil {
